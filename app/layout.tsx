@@ -5,6 +5,7 @@ import TopHeader from "@/src/components/navigation/TopHeader";
 import Sidebar from "@/src/components/navigation/Sidebar";
 import BottomNav from "@/src/components/navigation/BottomNav";
 import OnboardingGate from "@/src/components/auth/OnboardingGate";
+import PresenceWriter from "@/src/components/PresenceWriter";
 
 export const metadata: Metadata = {
   title: "NoorFeed — Islamic Social Media",
@@ -17,7 +18,10 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
     <html lang="en" className="h-full">
       <body className="flex min-h-full flex-col bg-white text-slate-900 antialiased">
         <AuthProvider>
-          {/* Intercepts authenticated users with no Firestore profile */}
+          {/* Tracks online / last-seen for the signed-in user */}
+          <PresenceWriter />
+
+          {/* Forces onboarding for authenticated users with no profile doc */}
           <OnboardingGate />
 
           <TopHeader />

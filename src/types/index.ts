@@ -108,3 +108,50 @@ export interface Notification {
   read: boolean;
   createdAt: Timestamp | null;
 }
+
+// ── Messaging ────────────────────────────────────────────────────────────────
+
+/** A conversation between exactly two mutually-following users */
+export interface Conversation {
+  id: string;
+  /** Sorted array of the two participant UIDs — always [smaller, larger] */
+  participantIds: [string, string];
+  /** Map of uid → UserProfile snapshot (denormalised for cheap list rendering) */
+  participants: Record<string, { username: string; displayName: string; avatarUrl: string }>;
+  lastMessage: string;
+  lastMessageAt: Timestamp | null;
+  lastSenderId: string;
+  /** uid → count of unread messages for that user */
+  unreadCounts: Record<string, number>;
+}
+
+export type MessageType = "text" | "post";
+
+export interface Message {
+  id: string;
+  conversationId: string;
+  senderId: string;
+  type: MessageType;
+  /** Plain text body (for type=text) */
+  text: string;
+  /** Attached post ID (for type=post) */
+  postId: string | null;
+  /** Snapshot of the attached post (denormalised so it renders even if post is deleted) */
+  postSnapshot: {
+    title: string;
+    mediaUrl: string;
+    mediaType: "image" | "video" | "text";
+    username: string;
+  } | null;
+  /** emoji → array of UIDs who reacted */
+  reactions: Record<string, string[]>;
+  /** UIDs who have read this message (populated by receiver on open) */
+  readBy: string[];
+  createdAt: Timestamp | null;
+}
+
+/** Presence document stored in users/{uid}/presence/status */
+export interface UserPresence {
+  online: boolean;
+  lastSeen: Timestamp | null;
+}

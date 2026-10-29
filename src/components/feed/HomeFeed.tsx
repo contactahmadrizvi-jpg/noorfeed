@@ -174,9 +174,11 @@ export default function HomeFeed() {
 
       {/* Post cards */}
       {!loading && (
-        <div className="space-y-4 px-4 pt-2 pb-8">
+        <div className="space-y-0 sm:space-y-4 sm:px-4 pt-2 pb-8">
           {posts.map((post) => (
-            <FeedCard key={post.id} post={post} onReported={handleReported} />
+            <div key={post.id} className="sm:rounded-2xl overflow-hidden">
+              <FeedCard post={post} onReported={handleReported} />
+            </div>
           ))}
         </div>
       )}

@@ -1,14 +1,18 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
 import {
   doc,
   onSnapshot,
+  getDoc,
+  setDoc,
   collection,
   query,
   where,
   getDocs,
   orderBy,
+  serverTimestamp,
 } from "firebase/firestore";
 import { db } from "@/src/lib/firebase";
 import { UserProfile, Post } from "@/src/types";
@@ -16,7 +20,7 @@ import { useAuth } from "@/src/context/AuthContext";
 import FollowButton from "./FollowButton";
 import FollowList from "./FollowList";
 import FeedCard from "@/src/components/feed/FeedCard";
-import { Loader2, Grid3X3, Users, Bookmark } from "lucide-react";
+import { Loader2, Grid3X3, Users, Bookmark, MessageSquare } from "lucide-react";
 
 type Tab = "posts" | "saved" | "followers" | "following";
 
@@ -24,8 +28,13 @@ interface Props {
   uid: string;
 }
 
+function conversationId(a: string, b: string) {
+  return [a, b].sort().join("_");
+}
+
 export default function UserProfileView({ uid }: Props) {
-  const { user: currentUser } = useAuth();
+  const { user: currentUser, profile: currentProfile, followingCache, loading: authLoading } = useAuth();
+  const router = useRouter();
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [posts, setPosts] = useState<Post[]>([]);
   const [savedPosts, setSavedPosts] = useState<Post[]>([]);
@@ -39,17 +48,13 @@ export default function UserProfileView({ uid }: Props) {
     if (!uid) return;
     setProfileLoading(true);
     const unsub = onSnapshot(doc(db, "users", uid), (snap) => {
-      if (snap.exists()) {
-        setProfile({ uid: snap.id, ...(snap.data() as Omit<UserProfile, "uid">) });
-      } else {
-        setProfile(null);
-      }
+      setProfile(snap.exists() ? { uid: snap.id, ...(snap.data() as Omit<UserProfile, "uid">) } : null);
       setProfileLoading(false);
     });
     return () => unsub();
   }, [uid]);
 
-  // ── User's posts (one-time) ──────────────────────────────────────────────
+  // ── User's posts ─────────────────────────────────────────────────────────
   useEffect(() => {
     if (!uid) return;
     setPostsLoading(true);
@@ -67,10 +72,8 @@ export default function UserProfileView({ uid }: Props) {
     load();
   }, [uid]);
 
-  // ── Saved posts — lazy loaded when tab is selected ───────────────────────
   const loadSaved = async () => {
     if (savedLoaded) return;
-    // Posts where current user's uid is in savedBy array
     const q = query(
       collection(db, "posts"),
       where("savedBy", "array-contains", uid),
@@ -92,8 +95,57 @@ export default function UserProfileView({ uid }: Props) {
     setSavedPosts((prev) => prev.filter((p) => p.id !== id));
   };
 
-  const loading = profileLoading || postsLoading;
+  // ── Open / create DM conversation ────────────────────────────────────────
+  const openDM = async () => {
+    if (!currentUser || !currentProfile || !profile) return;
+    const cid = conversationId(currentUser.uid, uid);
+    const convRef = doc(db, "conversations", cid);
+    const snap = await getDoc(convRef);
+    if (!snap.exists()) {
+      await setDoc(convRef, {
+        participantIds: [currentUser.uid, uid].sort(),
+        participants: {
+          [currentUser.uid]: {
+            username: currentProfile.username,
+            displayName: currentProfile.displayName,
+            avatarUrl: currentProfile.avatarUrl,
+          },
+          [uid]: {
+            username: profile.username,
+            displayName: profile.displayName,
+            avatarUrl: profile.avatarUrl,
+          },
+        },
+        lastMessage: "",
+        lastMessageAt: serverTimestamp(),
+        lastSenderId: "",
+        unreadCounts: { [currentUser.uid]: 0, [uid]: 0 },
+      });
+    }
+    router.push(`/messages/${cid}`);
+  };
+
+  // Wait for auth to finish before deciding "not found" vs guest
+  const loading = profileLoading || postsLoading || authLoading;
   const isOwn = currentUser?.uid === uid;
+
+  // Mutual follow = I follow them AND they follow me (they are in my followingCache
+  // AND I am in their followers — but for simplicity we check both follow docs)
+  const iMutualFollow =
+    !isOwn &&
+    !!currentUser &&
+    followingCache.has(uid); // I follow them (cache pre-loaded at login)
+
+  // We also need to know if they follow me back — check via a follow doc
+  const [theyFollowMe, setTheyFollowMe] = useState(false);
+  useEffect(() => {
+    if (!currentUser || !uid || isOwn) return;
+    getDoc(doc(db, "follows", `${uid}_${currentUser.uid}`)).then((snap) =>
+      setTheyFollowMe(snap.exists())
+    );
+  }, [currentUser, uid, isOwn]);
+
+  const isMutual = iMutualFollow && theyFollowMe;
 
   if (loading) {
     return (
@@ -103,6 +155,7 @@ export default function UserProfileView({ uid }: Props) {
     );
   }
 
+  // Own profile with no doc → onboarding gate handles it, show spinner
   if (!profile && isOwn) {
     return (
       <div className="flex justify-center py-20">
@@ -111,6 +164,7 @@ export default function UserProfileView({ uid }: Props) {
     );
   }
 
+  // Genuinely missing profile (works for both guests and logged-in users)
   if (!profile) {
     return (
       <div className="flex flex-col items-center gap-3 py-20 text-center">
@@ -121,7 +175,6 @@ export default function UserProfileView({ uid }: Props) {
     );
   }
 
-  // Only show the Saved tab on your own profile
   const tabs: Tab[] = isOwn
     ? ["posts", "saved", "followers", "following"]
     : ["posts", "followers", "following"];
@@ -166,7 +219,22 @@ export default function UserProfileView({ uid }: Props) {
                 <p className="text-xs text-slate-500">Following</p>
               </button>
             </div>
-            {!isOwn && currentUser && <FollowButton targetUid={uid} />}
+
+            {/* Follow + Message buttons */}
+            {!isOwn && currentUser && (
+              <div className="flex gap-2">
+                <FollowButton targetUid={uid} />
+                {isMutual && (
+                  <button
+                    onClick={openDM}
+                    className="flex items-center gap-1.5 rounded-full border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
+                  >
+                    <MessageSquare className="h-4 w-4" />
+                    Message
+                  </button>
+                )}
+              </div>
+            )}
           </div>
         </div>
 
@@ -195,9 +263,7 @@ export default function UserProfileView({ uid }: Props) {
             key={t}
             onClick={() => handleTabChange(t)}
             className={`flex flex-1 items-center justify-center gap-1.5 py-3 text-sm font-medium capitalize transition ${
-              tab === t
-                ? "border-b-2 border-emerald-500 text-emerald-600"
-                : "text-slate-500 hover:text-slate-700"
+              tab === t ? "border-b-2 border-emerald-500 text-emerald-600" : "text-slate-500 hover:text-slate-700"
             }`}
           >
             {TAB_ICON[t]}

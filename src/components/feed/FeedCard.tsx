@@ -307,7 +307,7 @@ function FeedCard({ post, onReported }: Props) {
     <>
       <article
         ref={cardRef}
-        className="overflow-hidden rounded-2xl border border-slate-100 bg-white shadow-sm"
+        className="overflow-hidden border-b border-slate-100 bg-white sm:rounded-2xl sm:border sm:shadow-sm"
       >
         {/* ── Author header ── */}
         <div className="flex items-center justify-between px-4 py-3">

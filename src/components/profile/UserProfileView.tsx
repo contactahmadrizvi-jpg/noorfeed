@@ -12,6 +12,7 @@ import {
   where,
   getDocs,
   orderBy,
+  limit,
   serverTimestamp,
 } from "firebase/firestore";
 import { db } from "@/src/lib/firebase";
@@ -24,37 +25,71 @@ import { Loader2, Grid3X3, Users, Bookmark, MessageSquare } from "lucide-react";
 
 type Tab = "posts" | "saved" | "followers" | "following";
 
-interface Props {
-  uid: string;
-}
+interface Props { uid: string }
 
 function conversationId(a: string, b: string) {
   return [a, b].sort().join("_");
 }
 
+// ── Skeleton for the header while profile loads ──────────────────────────────
+function ProfileSkeleton() {
+  return (
+    <div className="animate-pulse px-4 py-6">
+      <div className="flex items-start justify-between gap-4">
+        <div className="h-20 w-20 shrink-0 rounded-full bg-slate-100" />
+        <div className="flex flex-1 flex-col items-end gap-3">
+          <div className="flex gap-6">
+            {[1,2,3].map(i => (
+              <div key={i} className="flex flex-col items-center gap-1">
+                <div className="h-5 w-8 rounded bg-slate-100" />
+                <div className="h-3 w-12 rounded bg-slate-100" />
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+      <div className="mt-4 space-y-2">
+        <div className="h-4 w-32 rounded bg-slate-100" />
+        <div className="h-3 w-24 rounded bg-slate-100" />
+        <div className="h-3 w-48 rounded bg-slate-100" />
+      </div>
+    </div>
+  );
+}
+
 export default function UserProfileView({ uid }: Props) {
-  const { user: currentUser, profile: currentProfile, followingCache, loading: authLoading } = useAuth();
+  const { user: currentUser, profile: currentProfile, followingCache } = useAuth();
   const router = useRouter();
-  const [profile, setProfile] = useState<UserProfile | null>(null);
-  const [posts, setPosts] = useState<Post[]>([]);
-  const [savedPosts, setSavedPosts] = useState<Post[]>([]);
-  const [savedLoaded, setSavedLoaded] = useState(false);
-  const [tab, setTab] = useState<Tab>("posts");
+
+  // Profile loads independently — no auth gate
+  const [profile, setProfile]         = useState<UserProfile | null>(null);
   const [profileLoading, setProfileLoading] = useState(true);
+
+  // Posts load independently
+  const [posts, setPosts]             = useState<Post[]>([]);
   const [postsLoading, setPostsLoading] = useState(true);
 
-  // ── Real-time user doc ───────────────────────────────────────────────────
+  // Saved — lazy
+  const [savedPosts, setSavedPosts]   = useState<Post[]>([]);
+  const [savedLoaded, setSavedLoaded] = useState(false);
+
+  const [tab, setTab]                 = useState<Tab>("posts");
+  const [theyFollowMe, setTheyFollowMe] = useState(false);
+
+  // ── Profile doc — real-time, starts immediately ──────────────────────────
   useEffect(() => {
     if (!uid) return;
     setProfileLoading(true);
     const unsub = onSnapshot(doc(db, "users", uid), (snap) => {
-      setProfile(snap.exists() ? { uid: snap.id, ...(snap.data() as Omit<UserProfile, "uid">) } : null);
+      setProfile(
+        snap.exists() ? { uid: snap.id, ...(snap.data() as Omit<UserProfile, "uid">) } : null
+      );
       setProfileLoading(false);
     });
     return () => unsub();
   }, [uid]);
 
-  // ── User's posts ─────────────────────────────────────────────────────────
+  // ── Posts — starts immediately alongside profile, limit 12 for fast paint ─
   useEffect(() => {
     if (!uid) return;
     setPostsLoading(true);
@@ -63,7 +98,8 @@ export default function UserProfileView({ uid }: Props) {
         collection(db, "posts"),
         where("userId", "==", uid),
         where("isApproved", "==", true),
-        orderBy("createdAt", "desc")
+        orderBy("createdAt", "desc"),
+        limit(12)
       );
       const snap = await getDocs(q);
       setPosts(snap.docs.map((d) => ({ id: d.id, ...(d.data() as Omit<Post, "id">) })));
@@ -72,6 +108,15 @@ export default function UserProfileView({ uid }: Props) {
     load();
   }, [uid]);
 
+  // ── Mutual follow check — runs only when currentUser is known ────────────
+  useEffect(() => {
+    if (!currentUser || !uid || currentUser.uid === uid) return;
+    getDoc(doc(db, "follows", `${uid}_${currentUser.uid}`)).then((snap) =>
+      setTheyFollowMe(snap.exists())
+    );
+  }, [currentUser, uid]);
+
+  // ── Saved posts (lazy) ───────────────────────────────────────────────────
   const loadSaved = async () => {
     if (savedLoaded) return;
     const q = query(
@@ -91,11 +136,11 @@ export default function UserProfileView({ uid }: Props) {
   };
 
   const handleReported = (id: string) => {
-    setPosts((prev) => prev.filter((p) => p.id !== id));
-    setSavedPosts((prev) => prev.filter((p) => p.id !== id));
+    setPosts((p) => p.filter((x) => x.id !== id));
+    setSavedPosts((p) => p.filter((x) => x.id !== id));
   };
 
-  // ── Open / create DM conversation ────────────────────────────────────────
+  // ── Open / create DM ─────────────────────────────────────────────────────
   const openDM = async () => {
     if (!currentUser || !currentProfile || !profile) return;
     const cid = conversationId(currentUser.uid, uid);
@@ -125,47 +170,14 @@ export default function UserProfileView({ uid }: Props) {
     router.push(`/messages/${cid}`);
   };
 
-  // Wait for auth to finish before deciding "not found" vs guest
-  const loading = profileLoading || postsLoading || authLoading;
-  const isOwn = currentUser?.uid === uid;
+  const isOwn    = currentUser?.uid === uid;
+  const iFollow  = !isOwn && !!currentUser && followingCache.has(uid);
+  const isMutual = iFollow && theyFollowMe;
 
-  // Mutual follow = I follow them AND they follow me (they are in my followingCache
-  // AND I am in their followers — but for simplicity we check both follow docs)
-  const iMutualFollow =
-    !isOwn &&
-    !!currentUser &&
-    followingCache.has(uid); // I follow them (cache pre-loaded at login)
+  // ── Render ───────────────────────────────────────────────────────────────
 
-  // We also need to know if they follow me back — check via a follow doc
-  const [theyFollowMe, setTheyFollowMe] = useState(false);
-  useEffect(() => {
-    if (!currentUser || !uid || isOwn) return;
-    getDoc(doc(db, "follows", `${uid}_${currentUser.uid}`)).then((snap) =>
-      setTheyFollowMe(snap.exists())
-    );
-  }, [currentUser, uid, isOwn]);
-
-  const isMutual = iMutualFollow && theyFollowMe;
-
-  if (loading) {
-    return (
-      <div className="flex justify-center py-20">
-        <Loader2 className="h-8 w-8 animate-spin text-emerald-500" />
-      </div>
-    );
-  }
-
-  // Own profile with no doc → onboarding gate handles it, show spinner
-  if (!profile && isOwn) {
-    return (
-      <div className="flex justify-center py-20">
-        <Loader2 className="h-8 w-8 animate-spin text-emerald-500" />
-      </div>
-    );
-  }
-
-  // Genuinely missing profile (works for both guests and logged-in users)
-  if (!profile) {
+  // Profile not found (only after loading is done)
+  if (!profileLoading && !profile && !isOwn) {
     return (
       <div className="flex flex-col items-center gap-3 py-20 text-center">
         <span className="text-5xl">🔍</span>
@@ -173,6 +185,11 @@ export default function UserProfileView({ uid }: Props) {
         <p className="text-sm text-slate-400">This account may not exist or has been removed.</p>
       </div>
     );
+  }
+
+  // Own profile, no doc yet → onboarding gate handles it
+  if (!profileLoading && !profile && isOwn) {
+    return <div className="flex justify-center py-20"><Loader2 className="h-8 w-8 animate-spin text-emerald-500" /></div>;
   }
 
   const tabs: Tab[] = isOwn
@@ -188,73 +205,76 @@ export default function UserProfileView({ uid }: Props) {
 
   return (
     <div className="mx-auto max-w-xl pb-24">
-      {/* ── Header ── */}
-      <div className="px-4 py-6">
-        <div className="flex items-start justify-between gap-4">
-          {profile.avatarUrl ? (
-            // eslint-disable-next-line @next/next/no-img-element
-            <img
-              src={profile.avatarUrl}
-              alt={profile.displayName}
-              className="h-20 w-20 shrink-0 rounded-full object-cover ring-2 ring-emerald-200"
-            />
-          ) : (
-            <div className="flex h-20 w-20 shrink-0 items-center justify-center rounded-full bg-emerald-100 text-2xl font-bold text-emerald-600 ring-2 ring-emerald-200">
-              {profile.displayName[0]?.toUpperCase()}
-            </div>
-          )}
-
-          <div className="flex flex-1 flex-col items-end gap-3">
-            <div className="flex gap-6 text-center">
-              <div>
-                <p className="text-lg font-bold text-slate-900">{posts.length}</p>
-                <p className="text-xs text-slate-500">Posts</p>
+      {/* ── Header — shows skeleton while loading, then real data instantly ── */}
+      {profileLoading || !profile ? (
+        <ProfileSkeleton />
+      ) : (
+        <div className="px-4 py-6">
+          <div className="flex items-start justify-between gap-4">
+            {profile.avatarUrl ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img
+                src={profile.avatarUrl}
+                alt={profile.displayName}
+                className="h-20 w-20 shrink-0 rounded-full object-cover ring-2 ring-emerald-200"
+              />
+            ) : (
+              <div className="flex h-20 w-20 shrink-0 items-center justify-center rounded-full bg-emerald-100 text-2xl font-bold text-emerald-600 ring-2 ring-emerald-200">
+                {profile.displayName[0]?.toUpperCase()}
               </div>
-              <button onClick={() => handleTabChange("followers")} className="text-center transition hover:opacity-70">
-                <p className="text-lg font-bold text-slate-900">{profile.followersCount}</p>
-                <p className="text-xs text-slate-500">Followers</p>
-              </button>
-              <button onClick={() => handleTabChange("following")} className="text-center transition hover:opacity-70">
-                <p className="text-lg font-bold text-slate-900">{profile.followingCount}</p>
-                <p className="text-xs text-slate-500">Following</p>
-              </button>
-            </div>
+            )}
 
-            {/* Follow + Message buttons */}
-            {!isOwn && currentUser && (
-              <div className="flex gap-2">
-                <FollowButton targetUid={uid} />
-                {isMutual && (
-                  <button
-                    onClick={openDM}
-                    className="flex items-center gap-1.5 rounded-full border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
-                  >
-                    <MessageSquare className="h-4 w-4" />
-                    Message
-                  </button>
-                )}
+            <div className="flex flex-1 flex-col items-end gap-3">
+              <div className="flex gap-6 text-center">
+                <div>
+                  <p className="text-lg font-bold text-slate-900">{posts.length}</p>
+                  <p className="text-xs text-slate-500">Posts</p>
+                </div>
+                <button onClick={() => handleTabChange("followers")} className="text-center hover:opacity-70 transition">
+                  <p className="text-lg font-bold text-slate-900">{profile.followersCount}</p>
+                  <p className="text-xs text-slate-500">Followers</p>
+                </button>
+                <button onClick={() => handleTabChange("following")} className="text-center hover:opacity-70 transition">
+                  <p className="text-lg font-bold text-slate-900">{profile.followingCount}</p>
+                  <p className="text-xs text-slate-500">Following</p>
+                </button>
+              </div>
+
+              {!isOwn && currentUser && (
+                <div className="flex gap-2">
+                  <FollowButton targetUid={uid} />
+                  {isMutual && (
+                    <button
+                      onClick={openDM}
+                      className="flex items-center gap-1.5 rounded-full border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 transition"
+                    >
+                      <MessageSquare className="h-4 w-4" />
+                      Message
+                    </button>
+                  )}
+                </div>
+              )}
+            </div>
+          </div>
+
+          <div className="mt-4">
+            <p className="font-bold text-slate-900">{profile.displayName}</p>
+            <p className="text-sm text-slate-500">@{profile.username}</p>
+            {profile.bio && (
+              <p className="mt-2 text-sm leading-relaxed text-slate-700">{profile.bio}</p>
+            )}
+            {profile.interests.length > 0 && (
+              <div className="mt-3 flex flex-wrap gap-1.5">
+                {profile.interests.map((i) => (
+                  <span key={i} className="rounded-full bg-emerald-50 px-2.5 py-0.5 text-xs font-medium text-emerald-700">
+                    {i}
+                  </span>
+                ))}
               </div>
             )}
           </div>
         </div>
-
-        <div className="mt-4">
-          <p className="font-bold text-slate-900">{profile.displayName}</p>
-          <p className="text-sm text-slate-500">@{profile.username}</p>
-          {profile.bio && (
-            <p className="mt-2 text-sm leading-relaxed text-slate-700">{profile.bio}</p>
-          )}
-          {profile.interests.length > 0 && (
-            <div className="mt-3 flex flex-wrap gap-1.5">
-              {profile.interests.map((interest) => (
-                <span key={interest} className="rounded-full bg-emerald-50 px-2.5 py-0.5 text-xs font-medium text-emerald-700">
-                  {interest}
-                </span>
-              ))}
-            </div>
-          )}
-        </div>
-      </div>
+      )}
 
       {/* ── Tabs ── */}
       <div className="flex border-b border-slate-100">
@@ -272,10 +292,26 @@ export default function UserProfileView({ uid }: Props) {
         ))}
       </div>
 
-      {/* ── Tab content ── */}
+      {/* ── Posts tab ── */}
       {tab === "posts" && (
         <div className="space-y-4 px-4 pt-4">
-          {posts.length === 0 ? (
+          {postsLoading ? (
+            // Skeleton cards while posts load
+            <div className="space-y-3">
+              {[1, 2, 3].map((i) => (
+                <div key={i} className="animate-pulse rounded-2xl border border-slate-100 bg-white p-4">
+                  <div className="flex items-center gap-3">
+                    <div className="h-9 w-9 rounded-full bg-slate-100" />
+                    <div className="space-y-1.5">
+                      <div className="h-3 w-24 rounded bg-slate-100" />
+                      <div className="h-3 w-16 rounded bg-slate-100" />
+                    </div>
+                  </div>
+                  <div className="mt-3 h-40 rounded-xl bg-slate-100" />
+                </div>
+              ))}
+            </div>
+          ) : posts.length === 0 ? (
             <p className="py-10 text-center text-sm text-slate-400">No posts yet.</p>
           ) : (
             posts.map((p) => <FeedCard key={p.id} post={p} onReported={handleReported} />)

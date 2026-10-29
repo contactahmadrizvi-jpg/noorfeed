@@ -92,11 +92,20 @@ export default function StoryViewer({ stories, startIndex, onClose }: Props) {
     if (stories[index]) setLiveStory(stories[index]);
   }, [index, stories]);
 
-  // ── Record view ──────────────────────────────────────────────────────────
+  // ── Record view — checks both in-session Set AND the Firestore viewedBy array ──
   const recordView = useCallback(
     async (story: Story) => {
       if (!user || user.uid === story.userId) return;
+      // Guard 1: already counted this session (in-memory, fast)
       if (viewedThisSession.current.has(story.id)) return;
+      // Guard 2: check the live story's viewedBy array — handles page reloads/remounts
+      // liveStory is the most current data from the onSnapshot listener
+      const alreadyViewed = (liveStory?.viewedBy ?? story.viewedBy ?? []).includes(user.uid);
+      if (alreadyViewed) {
+        // Mark in session so we don't check Firestore again this session
+        viewedThisSession.current.add(story.id);
+        return;
+      }
       viewedThisSession.current.add(story.id);
       try {
         await updateDoc(doc(db, "stories", story.id), {
@@ -105,7 +114,7 @@ export default function StoryViewer({ stories, startIndex, onClose }: Props) {
         });
       } catch { /* non-critical */ }
     },
-    [user]
+    [user, liveStory]
   );
 
   useEffect(() => {

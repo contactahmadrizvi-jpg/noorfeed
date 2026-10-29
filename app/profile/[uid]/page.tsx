@@ -1,10 +1,11 @@
 import UserProfileView from "@/src/components/profile/UserProfileView";
 
-interface Props {
-  params: Promise<{ uid: string }>;
-}
-
-export default async function ProfilePage({ params }: Props) {
-  const { uid } = await params;
-  return <UserProfileView uid={uid} />;
+// Force this to be a static shell — no server-side work, no awaiting params.
+// The client component handles all data fetching directly from Firestore.
+export default function ProfilePage({
+  params,
+}: {
+  params: { uid: string };
+}) {
+  return <UserProfileView uid={params.uid} />;
 }

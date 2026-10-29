@@ -35,6 +35,12 @@ googleProvider.setCustomParameters({ prompt: "select_account" });
 interface AuthContextValue {
   user: User | null;
   profile: UserProfile | null;
+  /**
+   * true ONLY for the brief moment Firebase is resolving the persisted
+   * auth token on first load (~100-200 ms). Once resolved, this flips to
+   * false immediately — profile/following load in the background without
+   * blocking the UI.
+   */
   loading: boolean;
   needsOnboarding: boolean;
   followingCache: Set<string>;
@@ -51,30 +57,40 @@ interface AuthContextValue {
 const AuthContext = createContext<AuthContextValue | null>(null);
 
 export function AuthProvider({ children }: { children: ReactNode }) {
-  const [user, setUser] = useState<User | null>(null);
-  const [profile, setProfile] = useState<UserProfile | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [user, setUser]                   = useState<User | null>(null);
+  const [profile, setProfile]             = useState<UserProfile | null>(null);
+  const [loading, setLoading]             = useState(true);
   const [needsOnboarding, setNeedsOnboarding] = useState(false);
-  const [followingCache, setFollowingCache] = useState<Set<string>>(new Set());
-  const [authPromptOpen, setAuthPromptOpen] = useState(false);
+  const [followingCache, setFollowingCache]   = useState<Set<string>>(new Set());
+  const [authPromptOpen, setAuthPromptOpen]   = useState(false);
 
+  // ── Profile fetch (non-blocking) ────────────────────────────────────────
   const fetchProfile = useCallback(async (uid: string) => {
-    const snap = await getDoc(doc(db, "users", uid));
-    if (snap.exists()) {
-      setProfile({ uid: snap.id, ...(snap.data() as Omit<UserProfile, "uid">) });
-      setNeedsOnboarding(false);
-    } else {
-      setProfile(null);
-      setNeedsOnboarding(true);
+    try {
+      const snap = await getDoc(doc(db, "users", uid));
+      if (snap.exists()) {
+        setProfile({ uid: snap.id, ...(snap.data() as Omit<UserProfile, "uid">) });
+        setNeedsOnboarding(false);
+      } else {
+        setProfile(null);
+        setNeedsOnboarding(true);
+      }
+    } catch {
+      // Network error — don't crash, leave profile null
     }
   }, []);
 
+  // ── Following cache (non-blocking) ──────────────────────────────────────
   const loadFollowingCache = useCallback(async (uid: string) => {
-    const q = query(collection(db, "follows"), where("followerId", "==", uid));
-    const snap = await getDocs(q);
-    setFollowingCache(
-      new Set(snap.docs.map((d) => d.data().followingId as string))
-    );
+    try {
+      const q = query(collection(db, "follows"), where("followerId", "==", uid));
+      const snap = await getDocs(q);
+      setFollowingCache(
+        new Set(snap.docs.map((d) => d.data().followingId as string))
+      );
+    } catch {
+      // Silently fail — cache stays empty
+    }
   }, []);
 
   const refreshProfile = useCallback(async () => {
@@ -96,16 +112,25 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     if (!user) setAuthPromptOpen(true);
   }, [user]);
 
+  // ── Auth state listener ──────────────────────────────────────────────────
+  // KEY CHANGE: setLoading(false) fires as soon as we know the auth state,
+  // NOT after profile/following have loaded. Profile + cache load in parallel
+  // in the background — the UI renders immediately with whatever it has.
   useEffect(() => {
-    const unsub = onAuthStateChanged(auth, async (u) => {
+    const unsub = onAuthStateChanged(auth, (u) => {
       setUser(u);
+
       if (u) {
-        await Promise.all([fetchProfile(u.uid), loadFollowingCache(u.uid)]);
+        // Fire profile + following loads concurrently, don't await them
+        fetchProfile(u.uid);
+        loadFollowingCache(u.uid);
       } else {
         setProfile(null);
         setNeedsOnboarding(false);
         setFollowingCache(new Set());
       }
+
+      // Auth state is now known — unlock the UI immediately
       setLoading(false);
     });
     return unsub;
@@ -119,11 +144,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return cred.user;
   };
 
-  /**
-   * Opens Google sign-in popup.
-   * Returns { user, isNew } — isNew=true means no Firestore profile exists yet
-   * and the caller should route to onboarding.
-   */
   const loginWithGoogle = async (): Promise<{ user: User; isNew: boolean }> => {
     const cred = await signInWithPopup(auth, googleProvider);
     const snap = await getDoc(doc(db, "users", cred.user.uid));
@@ -153,7 +173,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       }}
     >
       {children}
-
       {authPromptOpen && (
         <SignInPrompt onClose={() => setAuthPromptOpen(false)} />
       )}

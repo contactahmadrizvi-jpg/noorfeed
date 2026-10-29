@@ -19,7 +19,10 @@ export const ISLAMIC_CATEGORIES: IslamicCategory[] = [
   "Scholar Lectures",
 ];
 
+export type StoryAudience = "public" | "followers";
+
 export interface UserProfile {
+  storyAudience?: StoryAudience;
   uid: string;
   email: string;
   username: string;
@@ -53,6 +56,7 @@ export interface Post {
 }
 
 export interface Story {
+  audience?: StoryAudience;
   id: string;
   userId: string;
   username: string;

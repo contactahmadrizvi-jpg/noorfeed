@@ -1,17 +1,9 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
-import {
-  collection,
-  query,
-  orderBy,
-  limit,
-  onSnapshot,
-  addDoc,
-  serverTimestamp,
-} from "firebase/firestore";
+import { useRef, useState } from "react";
+import { doc, getDoc, collection, addDoc, serverTimestamp } from "firebase/firestore";
 import { db } from "@/src/lib/firebase";
-import { Story } from "@/src/types";
+import { useVisibleStories } from "@/src/hooks/useVisibleStories";
 import { useAuth } from "@/src/context/AuthContext";
 import { uploadToCloudinary, getMediaType } from "@/src/lib/cloudinary";
 import StoryViewer from "./StoryViewer";
@@ -21,7 +13,8 @@ export default function StoriesBar() {
   const { user, profile } = useAuth();
   const fileRef = useRef<HTMLInputElement>(null);
 
-  const [stories, setStories] = useState<Story[]>([]);
+  const { stories, error: storiesError } = useVisibleStories(user?.uid ?? null);
+  const [uploadError, setUploadError] = useState("");
   const [uploading, setUploading] = useState(false);
   const [uploadPct, setUploadPct] = useState(0);
 
@@ -34,23 +27,6 @@ export default function StoriesBar() {
   // Viewer state
   const [viewerOpen, setViewerOpen] = useState(false);
   const [viewerIndex, setViewerIndex] = useState(0);
-
-  /* ── real-time listener for active stories ── */
-  useEffect(() => {
-    const q = query(
-      collection(db, "stories"),
-      orderBy("createdAt", "desc"),
-      limit(50)
-    );
-    const now = Date.now();
-    const unsub = onSnapshot(q, (snap) => {
-      const active = snap.docs
-        .map((d) => ({ id: d.id, ...(d.data() as Omit<Story, "id">) }))
-        .filter((s) => s.expiresAt > now);
-      setStories(active);
-    });
-    return () => unsub();
-  }, []);
 
   /* ── step 1: user picks a file → open duration picker ── */
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -68,9 +44,15 @@ export default function StoriesBar() {
     if (!pendingFile || !user || !profile) return;
     setDurationPickerOpen(false);
     setUploading(true);
+    setUploadError("");
     try {
+      const settings = await getDoc(doc(db, "users", user.uid));
+      if (!settings.exists()) throw new Error("Your profile is unavailable. Please try again.");
+      const audience = settings.data().storyAudience ?? "public";
+      if (audience !== "public" && audience !== "followers") throw new Error("Please save your story audience in Settings first.");
       const result = await uploadToCloudinary(pendingFile, setUploadPct);
       await addDoc(collection(db, "stories"), {
+        audience,
         userId: user.uid,
         username: profile.username,
         userAvatar: profile.avatarUrl,
@@ -87,6 +69,7 @@ export default function StoriesBar() {
       // onSnapshot listener will update stories automatically
     } catch (err) {
       console.error("Story upload error:", err);
+      setUploadError(err instanceof Error ? err.message : "Could not upload your story. Please try again.");
     } finally {
       setUploading(false);
       setUploadPct(0);
@@ -191,6 +174,8 @@ export default function StoriesBar() {
           </div>
         </div>
       )}
+
+      {(storiesError || uploadError) && <p role="alert" className="px-4 py-2 text-xs text-red-600">{uploadError || storiesError}</p>}
 
       {/* ── Stories scroll row ── */}
       <div className="flex gap-3 overflow-x-auto px-4 py-3 scrollbar-hide">

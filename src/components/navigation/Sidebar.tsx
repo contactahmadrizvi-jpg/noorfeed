@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Home, Compass, PlusSquare, Bell, User, MessageSquare } from "lucide-react";
+import { Home, Compass, PlusSquare, Bell, User, MessageSquare, Settings } from "lucide-react";
 import { useAuth } from "@/src/context/AuthContext";
 import { useUnreadMessages } from "@/src/hooks/useUnreadMessages";
 
@@ -13,6 +13,7 @@ const navItems = [
   { label: "Messages",      href: "/messages",      icon: MessageSquare },
   { label: "Notifications", href: "/notifications", icon: Bell },
   { label: "Profile",       href: "/profile",       icon: User },
+  { label: "Settings",      href: "/settings",      icon: Settings },
 ];
 
 export default function Sidebar() {
@@ -53,7 +54,7 @@ export default function Sidebar() {
         <div className="rounded-xl border border-emerald-100 bg-emerald-50 p-4">
           <p className="text-xs font-semibold text-emerald-700">🌙 Daily Reminder</p>
           <p className="mt-1 text-xs text-emerald-600 leading-relaxed">
-            "Whoever believes in Allah and the Last Day, let him speak good or remain silent."
+            &ldquo;Whoever believes in Allah and the Last Day, let him speak good or remain silent.&rdquo;
           </p>
           <p className="mt-1 text-[10px] text-emerald-500">— Bukhari & Muslim</p>
         </div>

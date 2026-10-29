@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { Search, LogOut, Bell } from "lucide-react";
+import { Search, LogOut, Bell, Settings } from "lucide-react";
 import { useAuth } from "@/src/context/AuthContext";
 import AuthModal from "@/src/components/auth/AuthModal";
 import ConfirmDialog from "@/src/components/ConfirmDialog";
@@ -140,6 +140,7 @@ export default function TopHeader() {
               </button>
 
               {/* Sign out */}
+              <button onClick={() => router.push("/settings")} aria-label="Settings" className="rounded-full p-2 text-slate-500 transition hover:bg-slate-100"><Settings className="h-5 w-5" /></button>
               <button
                 onClick={() => setLogoutOpen(true)}
                 aria-label="Sign out"

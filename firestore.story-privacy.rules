@@ -1,0 +1,24 @@
+// Merge this match block inside your existing /databases/{database}/documents.
+// REPLACE existing story permissions: any other broad allow still grants access.
+match /stories/{storyId} {
+  function signedIn() { return request.auth != null; }
+  function owner() { return signedIn() && resource.data.userId == request.auth.uid; }
+  function canView() {
+    return resource.data.get('audience', 'followers') == 'public'
+      || owner()
+      || (signedIn() && exists(/databases/$(database)/documents/follows/$(request.auth.uid + '_' + resource.data.userId)));
+  }
+  function chosenAudience() {
+    return get(/databases/$(database)/documents/users/$(request.auth.uid)).data.get('storyAudience', 'public');
+  }
+  allow get, list: if canView();
+  allow create: if signedIn()
+    && request.resource.data.userId == request.auth.uid
+    && request.resource.data.audience in ['public', 'followers']
+    && request.resource.data.audience == chosenAudience();
+  allow update: if signedIn() && canView()
+    && request.resource.data.userId == resource.data.userId
+    && request.resource.data.get('audience', 'followers') == resource.data.get('audience', 'followers')
+    && (owner() || request.resource.data.diff(resource.data).affectedKeys().hasOnly(['viewedBy', 'viewsCount', 'likedBy', 'likesCount']));
+  allow delete: if owner();
+}

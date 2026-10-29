@@ -16,10 +16,12 @@ import {
 import { db } from "@/src/lib/firebase";
 import { Story, UserProfile } from "@/src/types";
 import { useAuth } from "@/src/context/AuthContext";
+import StoryMedia from "./StoryMedia";
+import { storyUploadTime } from "@/src/lib/storyPlayback";
 import {
   X,
-  ChevronLeft,
-  ChevronRight,
+
+
   Eye,
   Heart,
   Users,
@@ -57,21 +59,21 @@ export default function StoryViewer({ stories, startIndex, onClose }: Props) {
 
   const [index, setIndex] = useState(startIndex);
   const [progress, setProgress] = useState(0);
+  const [muted, setMuted] = useState(true);
+  const [now, setNow] = useState(() => Date.now());
 
   // Real-time story data for the currently displayed story
-  const [liveStory, setLiveStory] = useState<Story>(stories[index]);
+  const [snapshot, setLiveStory] = useState<Story | null>(null);
+  const liveStory = snapshot?.id === stories[index]?.id ? snapshot : stories[index];
 
   // Viewer list panel (owner only)
   const [viewerListOpen, setViewerListOpen] = useState(false);
   const [viewers, setViewers] = useState<UserProfile[]>([]);
   const [viewersLoading, setViewersLoading] = useState(false);
 
-  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const startRef = useRef<number>(Date.now());
   const viewedThisSession = useRef<Set<string>>(new Set());
 
   const current = stories[index]; // base story from prop (has id)
-  const durationMs = Math.min(60, Math.max(1, liveStory?.duration ?? 7)) * 1000;
   const isOwn = user?.uid === current?.userId;
   const liked = user ? (liveStory?.likedBy ?? []).includes(user.uid) : false;
 
@@ -85,12 +87,6 @@ export default function StoryViewer({ stories, startIndex, onClose }: Props) {
     });
     return () => unsub();
   }, [current?.id]);
-
-  // Reset liveStory to the static prop data when index changes
-  // (the listener above will immediately update it with fresh data)
-  useEffect(() => {
-    if (stories[index]) setLiveStory(stories[index]);
-  }, [index, stories]);
 
   // ── Record view — checks both in-session Set AND the Firestore viewedBy array ──
   const recordView = useCallback(
@@ -117,10 +113,6 @@ export default function StoryViewer({ stories, startIndex, onClose }: Props) {
     [user, liveStory]
   );
 
-  useEffect(() => {
-    if (current) recordView(current);
-  }, [current, recordView]);
-
   // ── Navigation ───────────────────────────────────────────────────────────
   const goNext = useCallback(() => {
     if (index < stories.length - 1) {
@@ -140,25 +132,10 @@ export default function StoryViewer({ stories, startIndex, onClose }: Props) {
     }
   }, [index]);
 
-  // ── Auto-advance timer ───────────────────────────────────────────────────
   useEffect(() => {
-    startRef.current = Date.now();
-    if (timerRef.current) clearInterval(timerRef.current);
-    timerRef.current = setInterval(() => {
-      const elapsed = Date.now() - startRef.current;
-      const pct = Math.min((elapsed / durationMs) * 100, 100);
-      setProgress(pct);
-      if (pct >= 100) goNext();
-    }, 50);
-    return () => { if (timerRef.current) clearInterval(timerRef.current); };
-  }, [index, durationMs, goNext]);
-
-  // Pause timer while viewer list is open
-  useEffect(() => {
-    if (viewerListOpen) {
-      if (timerRef.current) clearInterval(timerRef.current);
-    }
-  }, [viewerListOpen]);
+    const timer = window.setInterval(() => setNow(Date.now()), 30_000);
+    return () => window.clearInterval(timer);
+  }, []);
 
   // ── Keyboard nav ─────────────────────────────────────────────────────────
   useEffect(() => {
@@ -170,13 +147,6 @@ export default function StoryViewer({ stories, startIndex, onClose }: Props) {
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
   }, [goNext, goPrev, onClose, viewerListOpen]);
-
-  // ── Tap to navigate ──────────────────────────────────────────────────────
-  const handleTap = (e: React.MouseEvent<HTMLDivElement>) => {
-    if ((e.target as HTMLElement).closest("button")) return;
-    if (viewerListOpen) return;
-    if (e.clientX < window.innerWidth / 2) goPrev(); else goNext();
-  };
 
   // ── Like story ───────────────────────────────────────────────────────────
   const handleLike = async (e: React.MouseEvent) => {
@@ -227,12 +197,14 @@ export default function StoryViewer({ stories, startIndex, onClose }: Props) {
   };
 
   if (!current) return null;
+  const uploaded = storyUploadTime(liveStory.createdAt, now);
 
   return (
     <div
       className="fixed inset-0 z-50 flex items-center justify-center bg-black"
       role="dialog"
       aria-modal="true"
+      aria-label="Story viewer"
     >
       {/* ── Progress bars ── */}
       <div className="absolute top-3 left-3 right-3 z-10 flex gap-1">
@@ -250,7 +222,7 @@ export default function StoryViewer({ stories, startIndex, onClose }: Props) {
       </div>
 
       {/* ── Header ── */}
-      <div className="absolute top-7 left-4 right-14 z-10 flex items-center gap-2">
+      <div className="absolute top-7 left-4 right-14 z-10 flex items-center gap-2 rounded-xl bg-black/45 p-2">
         {current.userAvatar ? (
           // eslint-disable-next-line @next/next/no-img-element
           <img src={current.userAvatar} alt="" className="h-9 w-9 shrink-0 rounded-full object-cover border-2 border-white" />
@@ -263,9 +235,9 @@ export default function StoryViewer({ stories, startIndex, onClose }: Props) {
           <span className="text-sm font-semibold text-white drop-shadow leading-none">
             @{current.username}
           </span>
-          <span className="text-[11px] text-white/60 leading-none mt-0.5">
-            {liveStory?.duration ?? 7}s
-          </span>
+          <time title={uploaded.exact} dateTime={liveStory.createdAt ? new Date(liveStory.createdAt.toMillis()).toISOString() : undefined} className="text-[11px] text-white/90 leading-none mt-1">
+            {uploaded.label}
+          </time>
         </div>
 
         {/* Owner: eye count button that opens viewer list */}
@@ -289,24 +261,9 @@ export default function StoryViewer({ stories, startIndex, onClose }: Props) {
         <X className="h-5 w-5" />
       </button>
 
-      {/* ── Media ── */}
-      <div className="relative h-full w-full max-w-sm cursor-pointer" onClick={handleTap}>
-        {current.mediaType === "video" ? (
-          <video key={current.id} src={current.mediaUrl} autoPlay muted playsInline className="h-full w-full object-cover" />
-        ) : (
-          // eslint-disable-next-line @next/next/no-img-element
-          <img key={current.id} src={current.mediaUrl} alt="story" className="h-full w-full object-cover" />
-        )}
-
-        <button aria-label="Previous" onClick={(e) => { e.stopPropagation(); goPrev(); }}
-          className="absolute left-2 top-1/2 -translate-y-1/2 rounded-full bg-black/20 p-1 text-white opacity-0 hover:opacity-100 transition">
-          <ChevronLeft className="h-6 w-6" />
-        </button>
-        <button aria-label="Next" onClick={(e) => { e.stopPropagation(); goNext(); }}
-          className="absolute right-2 top-1/2 -translate-y-1/2 rounded-full bg-black/20 p-1 text-white opacity-0 hover:opacity-100 transition">
-          <ChevronRight className="h-6 w-6" />
-        </button>
-      </div>
+      <StoryMedia key={current.id} story={current} paused={viewerListOpen} muted={muted}
+        onMutedChange={setMuted} onProgress={setProgress} onReady={() => { void recordView(current); }}
+        onNext={goNext} onPrevious={goPrev} />
 
       {/* ── Bottom bar ── */}
       <div className="absolute bottom-0 left-0 right-0 z-10 max-w-sm mx-auto px-4 pb-8">

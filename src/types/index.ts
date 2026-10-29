@@ -1,4 +1,5 @@
 import { Timestamp } from "firebase/firestore";
+import type { FeedSignals } from "@/src/lib/feedLearning";
 
 export type IslamicCategory =
   | "Quran"
@@ -22,6 +23,7 @@ export const ISLAMIC_CATEGORIES: IslamicCategory[] = [
 export type StoryAudience = "public" | "followers";
 
 export interface UserProfile {
+  feedSignals?: FeedSignals;
   storyAudience?: StoryAudience;
   uid: string;
   email: string;

@@ -27,6 +27,7 @@ export default function ConfirmDialog({ title, description, confirmLabel, onConf
     finally { lock.current = false; setBusy(false); }
   }
   return <dialog ref={dialog} aria-labelledby={`${id}-title`} aria-describedby={`${id}-description`}
+    onKeyDown={(e) => e.stopPropagation()}
     onCancel={(e) => { e.preventDefault(); close(); }}
     onClick={(e) => { if (e.target === e.currentTarget) close(); }}
     className="fixed inset-0 m-auto w-[calc(100%-2rem)] max-w-sm rounded-2xl border border-slate-100 bg-white p-6 text-slate-900 shadow-2xl backdrop:bg-black/40 backdrop:backdrop-blur-sm">

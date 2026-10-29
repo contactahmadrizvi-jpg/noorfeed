@@ -17,11 +17,12 @@ import { db } from "@/src/lib/firebase";
 import { Story, UserProfile } from "@/src/types";
 import { useAuth } from "@/src/context/AuthContext";
 import StoryMedia from "./StoryMedia";
+import ConfirmDialog from "@/src/components/ConfirmDialog";
+import { deleteOwnStory } from "@/src/lib/deleteStory";
 import { storyUploadTime } from "@/src/lib/storyPlayback";
 import {
   X,
-
-
+  Trash2,
   Eye,
   Heart,
   Users,
@@ -60,6 +61,7 @@ export default function StoryViewer({ stories, startIndex, onClose }: Props) {
   const [index, setIndex] = useState(startIndex);
   const [progress, setProgress] = useState(0);
   const [muted, setMuted] = useState(true);
+  const [deleteTarget, setDeleteTarget] = useState<Story | null>(null);
   const [now, setNow] = useState(() => Date.now());
 
   // Real-time story data for the currently displayed story
@@ -140,13 +142,14 @@ export default function StoryViewer({ stories, startIndex, onClose }: Props) {
   // ── Keyboard nav ─────────────────────────────────────────────────────────
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
+      if (deleteTarget) return;
       if (e.key === "ArrowRight") goNext();
       if (e.key === "ArrowLeft") goPrev();
       if (e.key === "Escape") { if (viewerListOpen) setViewerListOpen(false); else onClose(); }
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [goNext, goPrev, onClose, viewerListOpen]);
+  }, [goNext, goPrev, onClose, viewerListOpen, deleteTarget]);
 
   // ── Like story ───────────────────────────────────────────────────────────
   const handleLike = async (e: React.MouseEvent) => {
@@ -250,6 +253,7 @@ export default function StoryViewer({ stories, startIndex, onClose }: Props) {
             {liveStory?.viewsCount ?? 0}
           </button>
         )}
+        {isOwn && <button onClick={() => setDeleteTarget(current)} aria-label="Delete story" title="Delete story" className="rounded-full bg-black/50 p-2 text-white transition hover:bg-red-600"><Trash2 className="h-4 w-4" /></button>}
       </div>
 
       {/* ── Close ── */}
@@ -261,9 +265,12 @@ export default function StoryViewer({ stories, startIndex, onClose }: Props) {
         <X className="h-5 w-5" />
       </button>
 
-      <StoryMedia key={current.id} story={current} paused={viewerListOpen} muted={muted}
+      <StoryMedia key={current.id} story={current} paused={viewerListOpen || !!deleteTarget} muted={muted}
         onMutedChange={setMuted} onProgress={setProgress} onReady={() => { void recordView(current); }}
         onNext={goNext} onPrevious={goPrev} />
+
+      {deleteTarget && <ConfirmDialog title="Delete story?" description="This will remove your story from your profile and everyone’s story feed." confirmLabel="Delete story"
+        onClose={() => setDeleteTarget(null)} onConfirm={async () => { await deleteOwnStory(deleteTarget.id); onClose(); }} />}
 
       {/* ── Bottom bar ── */}
       <div className="absolute bottom-0 left-0 right-0 z-10 max-w-sm mx-auto px-4 pb-8">

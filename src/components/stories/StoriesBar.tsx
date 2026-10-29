@@ -13,7 +13,7 @@ export default function StoriesBar() {
   const { user, profile } = useAuth();
   const fileRef = useRef<HTMLInputElement>(null);
 
-  const { stories, error: storiesError } = useVisibleStories(user?.uid ?? null);
+  const { stories, error: storiesError, retry: retryStories } = useVisibleStories(user?.uid ?? null);
   const [uploadError, setUploadError] = useState("");
   const [uploading, setUploading] = useState(false);
   const [uploadPct, setUploadPct] = useState(0);
@@ -175,7 +175,7 @@ export default function StoriesBar() {
         </div>
       )}
 
-      {(storiesError || uploadError) && <p role="alert" className="px-4 py-2 text-xs text-red-600">{uploadError || storiesError}</p>}
+      {(storiesError || uploadError) && <p role="alert" className="px-4 py-2 text-xs text-red-600">{uploadError || storiesError} {storiesError && <button onClick={retryStories} className="font-semibold underline">Retry</button>}</p>}
 
       {/* ── Stories scroll row ── */}
       <div className="flex gap-3 overflow-x-auto px-4 py-3 scrollbar-hide">

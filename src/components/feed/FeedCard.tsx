@@ -24,6 +24,7 @@ import VideoPlayer from "./VideoPlayer";
 import SharePostSheet from "./SharePostSheet";
 import ConfirmDialog from "@/src/components/ConfirmDialog";
 import { deleteOwnPost } from "@/src/lib/deletePost";
+import { recordFeedSignal } from "@/src/lib/feedSignals";
 import { trackPostView, cancelPostViewTracking } from "@/src/lib/postViewTracker";
 import {
   Heart,
@@ -47,7 +48,6 @@ interface Props {
 }
 
 const REACTION_EMOJIS = ["❤️", "😂", "😮", "😢", "🤲", "👍"];
-const PAGE_SIZE = 10; // comments per page
 
 // ── Fire-and-forget notification ─────────────────────────────────────────────
 async function sendNotification(data: {
@@ -79,6 +79,11 @@ function FeedCard({ post, onReported }: Props) {
   const { user, profile, requireAuth } = useAuth();
   const router = useRouter();
   const cardRef = useRef<HTMLElement>(null);
+  const [renderTime, setRenderTime] = useState(() => Date.now());
+  useEffect(() => {
+    const timer = window.setInterval(() => setRenderTime(Date.now()), 60_000);
+    return () => window.clearInterval(timer);
+  }, []);
 
   const [liked, setLiked] = useState(
     user
@@ -119,13 +124,17 @@ function FeedCard({ post, onReported }: Props) {
   useEffect(() => {
     const card = cardRef.current;
     if (!card || !user) return;
+    let interestTimer: ReturnType<typeof setTimeout> | null = null;
 
     const obs = new IntersectionObserver(
       ([entry]) => {
         if (entry.isIntersecting) {
           trackPostView(post.id, post.userId, user.uid);
+          if (interestTimer) clearTimeout(interestTimer);
+          interestTimer = setTimeout(() => recordFeedSignal(user.uid, post, "view"), 4000);
         } else {
           cancelPostViewTracking(post.id);
+          if (interestTimer) clearTimeout(interestTimer);
         }
       },
       { threshold: 0.5 }
@@ -133,9 +142,10 @@ function FeedCard({ post, onReported }: Props) {
     obs.observe(card);
     return () => {
       obs.disconnect();
+      if (interestTimer) clearTimeout(interestTimer);
       cancelPostViewTracking(post.id);
     };
-  }, [post.id, post.userId, user]);
+  }, [post, user]);
 
   // ── Long-press to show likers ────────────────────────────────────────────
   const loadLikers = useCallback(async () => {
@@ -176,6 +186,7 @@ function FeedCard({ post, onReported }: Props) {
       likesCount: increment(next ? 1 : -1),
       likedBy: next ? arrayUnion(user.uid) : arrayRemove(user.uid),
     });
+    recordFeedSignal(user.uid, post, "like", next);
     if (next) {
       sendNotification({
         toUserId: post.userId,
@@ -199,6 +210,7 @@ function FeedCard({ post, onReported }: Props) {
       savesCount: increment(next ? 1 : -1),
       savedBy: next ? arrayUnion(user.uid) : arrayRemove(user.uid),
     });
+    recordFeedSignal(user.uid, post, "save", next);
   };
 
   // ── Share ─────────────────────────────────────────────────────────────────
@@ -213,6 +225,7 @@ function FeedCard({ post, onReported }: Props) {
     setReported(true);
     setMenuOpen(false);
     await updateDoc(postRef, { reportsCount: increment(1) });
+    if (user) recordFeedSignal(user.uid, post, "report");
     onReported(post.id);
   };
 
@@ -250,6 +263,7 @@ function FeedCard({ post, onReported }: Props) {
       createdAt: serverTimestamp() as Comment["createdAt"],
     };
     const ref = await addDoc(collection(db, "comments"), data);
+    recordFeedSignal(user.uid, post, "comment");
     setComments((prev) => [...prev, { id: ref.id, ...data }]);
     setCommentText("");
     setReplyingTo(null);
@@ -293,8 +307,8 @@ function FeedCard({ post, onReported }: Props) {
 
   const timeAgo = (ts: Post["createdAt"]) => {
     if (!ts) return "";
-    const ms = ts.toMillis ? ts.toMillis() : Date.now();
-    const diff = (Date.now() - ms) / 1000;
+    const ms = ts.toMillis ? ts.toMillis() : renderTime;
+    const diff = Math.max(0, (renderTime - ms) / 1000);
     if (diff < 60) return `${Math.floor(diff)}s`;
     if (diff < 3600) return `${Math.floor(diff / 60)}m`;
     if (diff < 86400) return `${Math.floor(diff / 3600)}h`;

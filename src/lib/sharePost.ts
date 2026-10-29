@@ -1,6 +1,7 @@
 import { collection, doc, increment, runTransaction, serverTimestamp } from "firebase/firestore";
 import { db } from "@/src/lib/firebase";
 import { Post, UserProfile } from "@/src/types";
+import { recordFeedSignal } from "./feedSignals";
 
 /** Validate fresh follow documents and commit the message and counters together. */
 export async function sharePostToConversation(sender: UserProfile, recipient: UserProfile, post: Post) {
@@ -43,5 +44,6 @@ export async function sharePostToConversation(sender: UserProfile, recipient: Us
     });
     transaction.update(doc(db, "posts", post.id), { sharesCount: increment(1) });
   });
+  recordFeedSignal(sender.uid, post, "share");
   return cid;
 }

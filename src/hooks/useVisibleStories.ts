@@ -7,6 +7,7 @@ import { Story } from "@/src/types";
 import { canViewStory } from "@/src/lib/storyAudience";
 
 export function useVisibleStories(uid: string | null) {
+  const [retryKey, setRetryKey] = useState(0);
   const [result, setResult] = useState<{ uid: string | null; stories: Story[]; error: string }>({ uid: null, stories: [], error: "" });
   useEffect(() => {
     let active = true;
@@ -23,19 +24,34 @@ export function useVisibleStories(uid: string | null) {
         if (story.expiresAt > now && canViewStory(story, uid, following)) merged.set(story.id, story);
       }
       setResult({ uid, stories: [...merged.values()].sort((a, b) => (b.createdAt?.toMillis() ?? 0) - (a.createdAt?.toMillis() ?? 0)).slice(0, 50),
-        error: failures.size ? "Some stories could not be loaded. Please refresh to try again." : "" });
+        error: failures.size ? "Some stories could not be loaded. Please try again." : "" });
     };
-    const subscribe = (key: string, request: Query<DocumentData>, version?: number) => onSnapshot(request, (snap) => {
+    const subscribe = (key: string, request: Query<DocumentData>, fallback: Query<DocumentData>, version?: number) => {
+      let stopped = false;
+      let fallbackSubscription: (() => void) | null = null;
+      const receive = (snap: import("firebase/firestore").QuerySnapshot<DocumentData>) => {
+      if (stopped) return;
       if (!active || (version !== undefined && version !== generation)) return;
       failures.delete(key);
       sources.set(key, snap.docs.map((item) => ({ ...item.data(), id: item.id } as Story)));
       publish();
-    }, () => {
+      };
+      const fail = () => {
+      if (stopped) return;
       if (!active || (version !== undefined && version !== generation)) return;
       failures.add(key); sources.delete(key); publish();
-    });
-    const publicSubscription = subscribe("public", query(collection(db, "stories"), where("audience", "==", "public"), orderBy("createdAt", "desc"), limit(50)));
-    const ownSubscription = uid ? subscribe("own", query(collection(db, "stories"), where("userId", "==", uid), orderBy("createdAt", "desc"), limit(50))) : () => {};
+      };
+      const primary = onSnapshot(request, receive, (error) => {
+        if (stopped || !active || (version !== undefined && version !== generation)) return;
+        // Removing the sort avoids the new composite index while preserving the audience filter.
+        if (error.code === "failed-precondition" && error.message.toLowerCase().includes("index")) {
+          fallbackSubscription = onSnapshot(fallback, receive, fail);
+        } else fail();
+      });
+      return () => { stopped = true; primary(); fallbackSubscription?.(); };
+    };
+    const publicSubscription = subscribe("public", query(collection(db, "stories"), where("audience", "==", "public"), orderBy("createdAt", "desc"), limit(50)), query(collection(db, "stories"), where("audience", "==", "public"), limit(200)));
+    const ownSubscription = uid ? subscribe("own", query(collection(db, "stories"), where("userId", "==", uid), orderBy("createdAt", "desc"), limit(50)), query(collection(db, "stories"), where("userId", "==", uid), limit(200))) : () => {};
     const followSubscription = uid ? onSnapshot(query(collection(db, "follows"), where("followerId", "==", uid)), (snap) => {
       generation++;
       followedSubscriptions.forEach((unsubscribe) => unsubscribe());
@@ -48,7 +64,7 @@ export function useVisibleStories(uid: string | null) {
       const ids = [...following].filter((id) => id !== uid);
       // Keep each request within Firestore's access-call limit for follow checks.
       for (let index = 0; index < ids.length; index += 8) {
-        followedSubscriptions.push(subscribe(`following:${index}`, query(collection(db, "stories"), where("userId", "in", ids.slice(index, index + 8)), orderBy("createdAt", "desc"), limit(50)), generation));
+        followedSubscriptions.push(subscribe(`following:${index}`, query(collection(db, "stories"), where("userId", "in", ids.slice(index, index + 8)), orderBy("createdAt", "desc"), limit(50)), query(collection(db, "stories"), where("userId", "in", ids.slice(index, index + 8)), limit(200)), generation));
       }
     }, () => {
       generation++; followedSubscriptions.forEach((unsubscribe) => unsubscribe()); followedSubscriptions = [];
@@ -58,6 +74,6 @@ export function useVisibleStories(uid: string | null) {
     }) : () => {};
     const expiryTimer = window.setInterval(publish, 30_000);
     return () => { active = false; window.clearInterval(expiryTimer); publicSubscription(); ownSubscription(); followSubscription(); followedSubscriptions.forEach((unsubscribe) => unsubscribe()); };
-  }, [uid]);
-  return result.uid === uid ? result : { uid, stories: [], error: "" };
+  }, [uid, retryKey]);
+  return { ...(result.uid === uid ? result : { uid, stories: [], error: "" }), retry: () => setRetryKey((value) => value + 1) };
 }

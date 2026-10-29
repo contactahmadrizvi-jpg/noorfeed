@@ -23,6 +23,7 @@ import {
   DocumentData,
 } from "firebase/firestore";
 import { db } from "@/src/lib/firebase";
+import { recordFeedSignal } from "@/src/lib/feedSignals";
 import { Conversation, Message, Post } from "@/src/types";
 import { useAuth } from "@/src/context/AuthContext";
 import { usePresenceStatus } from "@/src/hooks/usePresence";
@@ -232,6 +233,7 @@ export default function ChatPage({ params }: { params: Promise<{ cid: string }> 
       [`unreadCounts.${otherId}`]: increment(1),
     });
     await batch.commit();
+    recordFeedSignal(user.uid, post, "share");
     setTimeout(() => bottomRef.current?.scrollIntoView({ behavior: "smooth" }), 50);
   };
 

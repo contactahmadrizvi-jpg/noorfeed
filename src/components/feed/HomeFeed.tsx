@@ -20,24 +20,56 @@ import FeedCard from "./FeedCard";
 import StoriesBar from "@/src/components/stories/StoriesBar";
 import { Loader2 } from "lucide-react";
 
-const PAGE_SIZE = 12; // posts per page — keeps initial load fast
+const PAGE_SIZE = 12;
+
+// ── Skeleton card ─────────────────────────────────────────────────────────────
+function FeedSkeleton() {
+  return (
+    <div className="animate-pulse border-b border-slate-100 bg-white sm:rounded-2xl sm:border sm:shadow-sm overflow-hidden">
+      {/* Author row */}
+      <div className="flex items-center gap-3 px-4 py-3">
+        <div className="h-9 w-9 shrink-0 rounded-full bg-slate-100" />
+        <div className="flex-1 space-y-1.5">
+          <div className="h-3 w-28 rounded bg-slate-100" />
+          <div className="h-2.5 w-16 rounded bg-slate-100" />
+        </div>
+        <div className="h-6 w-6 rounded-full bg-slate-100" />
+      </div>
+      {/* Category pill */}
+      <div className="px-4 pb-2">
+        <div className="h-5 w-20 rounded-full bg-slate-100" />
+      </div>
+      {/* Title */}
+      <div className="px-4 pb-3 space-y-1.5">
+        <div className="h-4 w-48 rounded bg-slate-100" />
+        <div className="h-3 w-36 rounded bg-slate-100" />
+      </div>
+      {/* Media placeholder */}
+      <div className="h-52 w-full bg-slate-100" />
+      {/* Action bar */}
+      <div className="flex items-center gap-3 px-4 py-3">
+        <div className="h-7 w-14 rounded-full bg-slate-100" />
+        <div className="h-7 w-10 rounded-full bg-slate-100" />
+        <div className="h-7 w-10 rounded-full bg-slate-100" />
+        <div className="ml-auto h-7 w-8 rounded-full bg-slate-100" />
+      </div>
+    </div>
+  );
+}
 
 export default function HomeFeed() {
   const { profile, followingCache } = useAuth();
 
-  const [posts, setPosts] = useState<Post[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [posts, setPosts]           = useState<Post[]>([]);
+  const [loading, setLoading]       = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
-  const [hasMore, setHasMore] = useState(true);
-  const [error, setError] = useState("");
+  const [hasMore, setHasMore]       = useState(true);
+  const [error, setError]           = useState("");
 
-  // Cursor for pagination — last document from previous page
-  const cursorRef = useRef<QueryDocumentSnapshot<DocumentData> | null>(null);
-
-  // Sentinel element at the bottom — IntersectionObserver fires when it enters view
+  const cursorRef   = useRef<QueryDocumentSnapshot<DocumentData> | null>(null);
   const sentinelRef = useRef<HTMLDivElement>(null);
 
-  // ── Initial load ─────────────────────────────────────────────────────────
+  // ── Initial load ──────────────────────────────────────────────────────────
   const loadInitial = useCallback(async () => {
     setLoading(true);
     setError("");
@@ -50,22 +82,10 @@ export default function HomeFeed() {
         limit(PAGE_SIZE)
       );
       const snap = await getDocs(q);
-
-      if (snap.empty) {
-        setPosts([]);
-        setHasMore(false);
-        setLoading(false);
-        return;
-      }
-
+      if (snap.empty) { setPosts([]); setHasMore(false); return; }
       cursorRef.current = snap.docs[snap.docs.length - 1];
       setHasMore(snap.docs.length === PAGE_SIZE);
-
-      const raw = snap.docs.map((d) => ({
-        id: d.id,
-        ...(d.data() as Omit<Post, "id">),
-      }));
-      // Apply personalized scoring only on the first page batch
+      const raw = snap.docs.map((d) => ({ id: d.id, ...(d.data() as Omit<Post, "id">) }));
       setPosts(sortFeed(raw, profile, followingCache));
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Failed to load posts.");
@@ -74,7 +94,7 @@ export default function HomeFeed() {
     }
   }, [profile, followingCache]);
 
-  // ── Load more (append next page) ─────────────────────────────────────────
+  // ── Load more ─────────────────────────────────────────────────────────────
   const loadMore = useCallback(async () => {
     if (!hasMore || loadingMore || !cursorRef.current) return;
     setLoadingMore(true);
@@ -87,27 +107,12 @@ export default function HomeFeed() {
         limit(PAGE_SIZE)
       );
       const snap = await getDocs(q);
-
-      if (snap.empty) {
-        setHasMore(false);
-        return;
-      }
-
+      if (snap.empty) { setHasMore(false); return; }
       cursorRef.current = snap.docs[snap.docs.length - 1];
       setHasMore(snap.docs.length === PAGE_SIZE);
-
-      const newPosts = snap.docs.map((d) => ({
-        id: d.id,
-        ...(d.data() as Omit<Post, "id">),
-      }));
-
-      // Append and re-score the full list so ranking is consistent
+      const newPosts = snap.docs.map((d) => ({ id: d.id, ...(d.data() as Omit<Post, "id">) }));
       setPosts((prev) => {
-        const merged = [
-          ...prev,
-          // Filter out any duplicates (safety net)
-          ...newPosts.filter((p) => !prev.some((e) => e.id === p.id)),
-        ];
+        const merged = [...prev, ...newPosts.filter((p) => !prev.some((e) => e.id === p.id))];
         return sortFeed(merged, profile, followingCache);
       });
     } catch (err: unknown) {
@@ -117,29 +122,21 @@ export default function HomeFeed() {
     }
   }, [hasMore, loadingMore, profile, followingCache]);
 
-  // ── Mount: load initial page ─────────────────────────────────────────────
-  useEffect(() => {
-    loadInitial();
-  }, [loadInitial]);
+  useEffect(() => { loadInitial(); }, [loadInitial]);
 
-  // ── Infinite scroll: watch sentinel ──────────────────────────────────────
+  // ── Infinite scroll sentinel ──────────────────────────────────────────────
   useEffect(() => {
     const sentinel = sentinelRef.current;
     if (!sentinel) return;
-
     const obs = new IntersectionObserver(
-      ([entry]) => {
-        if (entry.isIntersecting) loadMore();
-      },
-      { rootMargin: "400px" } // start loading 400 px before the bottom
+      ([entry]) => { if (entry.isIntersecting) loadMore(); },
+      { rootMargin: "400px" }
     );
     obs.observe(sentinel);
     return () => obs.disconnect();
   }, [loadMore]);
 
-  const handleReported = (id: string) => {
-    setPosts((prev) => prev.filter((p) => p.id !== id));
-  };
+  const handleReported = (id: string) => setPosts((prev) => prev.filter((p) => p.id !== id));
 
   return (
     <div className="mx-auto w-full max-w-xl">
@@ -148,10 +145,14 @@ export default function HomeFeed() {
         <StoriesBar />
       </div>
 
-      {/* Initial loading skeleton */}
+      {/* ── Skeleton loading state ── */}
       {loading && (
-        <div className="flex items-center justify-center py-16">
-          <Loader2 className="h-8 w-8 animate-spin text-emerald-500" />
+        <div className="space-y-0 sm:space-y-4 sm:px-4 pt-2 pb-4">
+          {[1, 2, 3, 4].map((i) => (
+            <div key={i} className="sm:overflow-hidden sm:rounded-2xl">
+              <FeedSkeleton />
+            </div>
+          ))}
         </div>
       )}
 
@@ -176,7 +177,7 @@ export default function HomeFeed() {
       {!loading && (
         <div className="space-y-0 sm:space-y-4 sm:px-4 pt-2 pb-8">
           {posts.map((post) => (
-            <div key={post.id} className="sm:rounded-2xl overflow-hidden">
+            <div key={post.id} className="sm:overflow-hidden sm:rounded-2xl">
               <FeedCard post={post} onReported={handleReported} />
             </div>
           ))}
@@ -186,7 +187,7 @@ export default function HomeFeed() {
       {/* Infinite scroll sentinel */}
       <div ref={sentinelRef} className="h-1" />
 
-      {/* Loading-more spinner */}
+      {/* Loading-more indicator */}
       {loadingMore && (
         <div className="flex justify-center py-6">
           <Loader2 className="h-6 w-6 animate-spin text-emerald-400" />

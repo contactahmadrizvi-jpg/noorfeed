@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import { use } from "react";
 import { useRouter } from "next/navigation";
+import Link from "next/link";
 import {
   doc,
   getDoc,
@@ -12,7 +13,6 @@ import {
   limit,
   startAfter,
   onSnapshot,
-  addDoc,
   updateDoc,
   arrayUnion,
   increment,
@@ -25,11 +25,10 @@ import {
 import { db } from "@/src/lib/firebase";
 import { Conversation, Message, Post } from "@/src/types";
 import { useAuth } from "@/src/context/AuthContext";
-import { useUserPresence, formatLastSeen } from "@/src/hooks/usePresence";
+import { usePresenceStatus } from "@/src/hooks/usePresence";
 import {
   ArrowLeft,
   Send,
-  SmilePlus,
   Image as ImageIcon,
   Loader2,
   CheckCheck,
@@ -66,9 +65,31 @@ export default function ChatPage({ params }: { params: Promise<{ cid: string }> 
   const initialScrollDone = useRef(false);
 
   // The other participant
+  const markRead = useCallback(
+    async (msgs: { id: string; readBy: string[] }[]) => {
+      if (!user || !cid) return;
+      const batch = writeBatch(db);
+      // Reset unread count
+      batch.update(doc(db, "conversations", cid), {
+        [`unreadCounts.${user.uid}`]: 0,
+      });
+      // Mark each unread message as read
+      msgs.forEach(({ id, readBy }) => {
+        if (!readBy?.includes(user.uid)) {
+          batch.update(doc(db, "conversations", cid, "messages", id), {
+            readBy: arrayUnion(user.uid),
+          });
+        }
+      });
+      await batch.commit().catch(() => {});
+    },
+    [user, cid]
+  );
+
+
   const otherId = convo?.participantIds.find((id) => id !== user?.uid) ?? null;
   const otherInfo = otherId ? convo?.participants[otherId] : null;
-  const presence = useUserPresence(otherId);
+  const presence = usePresenceStatus(otherId);
 
   // ── Load conversation metadata ───────────────────────────────────────────
   useEffect(() => {
@@ -113,29 +134,9 @@ export default function ChatPage({ params }: { params: Promise<{ cid: string }> 
     });
 
     return () => unsub();
-  }, [cid, user]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [cid, user, markRead]);
 
   // ── Reset unread count + mark individual messages read ───────────────────
-  const markRead = useCallback(
-    async (msgs: { id: string; readBy: string[] }[]) => {
-      if (!user || !cid) return;
-      const batch = writeBatch(db);
-      // Reset unread count
-      batch.update(doc(db, "conversations", cid), {
-        [`unreadCounts.${user.uid}`]: 0,
-      });
-      // Mark each unread message as read
-      msgs.forEach(({ id, readBy }) => {
-        if (!readBy?.includes(user.uid)) {
-          batch.update(doc(db, "conversations", cid, "messages", id), {
-            readBy: arrayUnion(user.uid),
-          });
-        }
-      });
-      await batch.commit().catch(() => {});
-    },
-    [user, cid]
-  );
 
   // ── Load older messages ───────────────────────────────────────────────────
   const loadMore = useCallback(async () => {
@@ -276,8 +277,9 @@ export default function ChatPage({ params }: { params: Promise<{ cid: string }> 
 
         <div className="flex-1 min-w-0">
           <p className="truncate text-sm font-semibold text-slate-900">{otherInfo?.displayName}</p>
-          <p className={`text-xs ${presence?.online ? "text-emerald-500" : "text-slate-400"}`}>
-            {formatLastSeen(presence)}
+          <p role="status" className={`flex items-center gap-1.5 text-xs ${presence.online ? "text-emerald-600" : "text-slate-400"}`}>
+            <span aria-hidden="true" className={`h-2 w-2 rounded-full ${presence.online ? "bg-emerald-500 ring-2 ring-emerald-100" : "bg-slate-300"}`} />
+            {presence.label}
           </p>
         </div>
       </div>
@@ -326,17 +328,21 @@ export default function ChatPage({ params }: { params: Promise<{ cid: string }> 
                   }`}
                 >
                   {/* Post share card */}
-                  {msg.type === "post" && msg.postSnapshot && (
-                    <div className={`mb-1.5 overflow-hidden rounded-xl border ${isMine ? "border-emerald-400/40" : "border-slate-200"}`}>
+                  {msg.type === "post" && msg.postSnapshot && msg.postId && (
+                    <Link href={`/posts/${encodeURIComponent(msg.postId)}`} prefetch={false}
+                      aria-label={`Open post by @${msg.postSnapshot.username}: ${msg.postSnapshot.title || "Shared post"}`}
+                      className={`mb-1.5 block overflow-hidden rounded-xl border transition hover:opacity-90 focus-visible:outline-2 focus-visible:outline-offset-2 ${isMine ? "border-emerald-400/40" : "border-slate-200"}`}>
                       {msg.postSnapshot.mediaUrl && msg.postSnapshot.mediaType === "image" && (
                         // eslint-disable-next-line @next/next/no-img-element
                         <img src={msg.postSnapshot.mediaUrl} alt="" className="h-32 w-full object-cover" loading="lazy" />
                       )}
+                      {msg.postSnapshot.mediaType === "video" && <div className="flex h-24 items-center justify-center bg-black/10 text-sm">▶ Video post</div>}
                       <div className={`px-2 py-1.5 ${isMine ? "bg-emerald-600/30" : "bg-slate-50"}`}>
                         <p className="text-xs font-medium truncate">@{msg.postSnapshot.username}</p>
-                        <p className="text-xs truncate opacity-80">{msg.postSnapshot.title}</p>
+                        <p className="text-xs truncate opacity-80">{msg.postSnapshot.title || "View post"}</p>
+                        <p className="mt-1 text-[10px] opacity-70">Tap to open post</p>
                       </div>
-                    </div>
+                    </Link>
                   )}
 
                   {msg.text && <span>{msg.text}</span>}
@@ -429,7 +435,6 @@ export default function ChatPage({ params }: { params: Promise<{ cid: string }> 
       {/* Share post picker */}
       {sharePostOpen && user && (
         <PostPickerSheet
-          userId={user.uid}
           onSelect={sendPost}
           onClose={() => setSharePostOpen(false)}
         />
@@ -440,11 +445,9 @@ export default function ChatPage({ params }: { params: Promise<{ cid: string }> 
 
 // ── Post picker — shows your own recent posts to share ───────────────────────
 function PostPickerSheet({
-  userId,
   onSelect,
   onClose,
 }: {
-  userId: string;
   onSelect: (p: Post) => void;
   onClose: () => void;
 }) {

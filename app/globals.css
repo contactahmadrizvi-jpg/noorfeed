@@ -1,8 +1,32 @@
 @import "tailwindcss";
 
 :root {
+  color-scheme: light;
   --background: #ffffff;
   --foreground: #0f172a;
+}
+
+/* Keep white surfaces, with clearer secondary text, edges and green actions. */
+@theme {
+  --color-slate-50: #f3f5f8;
+  --color-slate-100: #dce3ec;
+  --color-slate-200: #c4cfdd;
+  --color-slate-300: #94a3b8;
+  --color-slate-400: #64748b;
+  --color-slate-500: #526176;
+  --color-slate-600: #435168;
+  --color-slate-700: #334155;
+  --color-slate-800: #1e293b;
+  --color-slate-900: #0f172a;
+
+  --color-emerald-50: #eaf6ef;
+  --color-emerald-100: #ccebd9;
+  --color-emerald-200: #a3d9ba;
+  --color-emerald-300: #6dbe94;
+  --color-emerald-400: #15825d;
+  --color-emerald-500: #087f5b;
+  --color-emerald-600: #066b4a;
+  --color-emerald-700: #06543f;
 }
 
 @theme inline {

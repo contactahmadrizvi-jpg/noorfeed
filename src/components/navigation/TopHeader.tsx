@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { Search, LogOut, Bell } from "lucide-react";
 import { useAuth } from "@/src/context/AuthContext";
 import AuthModal from "@/src/components/auth/AuthModal";
+import ConfirmDialog from "@/src/components/ConfirmDialog";
 import { useUnreadNotifications } from "@/src/hooks/useUnreadNotifications";
 import {
   collection,
@@ -22,6 +23,7 @@ export default function TopHeader() {
   const unread = useUnreadNotifications();
 
   const [authOpen, setAuthOpen] = useState(false);
+  const [logoutOpen, setLogoutOpen] = useState(false);
   const [authView, setAuthView] = useState<"login" | "signup">("login");
   const [searchVal, setSearchVal] = useState("");
   const [results, setResults] = useState<UserProfile[]>([]);
@@ -139,7 +141,7 @@ export default function TopHeader() {
 
               {/* Sign out */}
               <button
-                onClick={() => logout()}
+                onClick={() => setLogoutOpen(true)}
                 aria-label="Sign out"
                 className="rounded-full p-2 text-slate-500 transition hover:bg-slate-100 hover:text-slate-700"
               >
@@ -166,6 +168,13 @@ export default function TopHeader() {
       </header>
 
       <AuthModal open={authOpen} onClose={() => setAuthOpen(false)} defaultView={authView} />
+      {logoutOpen && user && <ConfirmDialog
+        title="Log out?"
+        description="Are you sure you want to log out of your account?"
+        confirmLabel="Log out"
+        onClose={() => setLogoutOpen(false)}
+        onConfirm={async () => { await logout(); router.push("/"); }}
+      />}
     </>
   );
 }

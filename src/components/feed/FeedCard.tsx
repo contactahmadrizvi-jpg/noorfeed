@@ -21,6 +21,9 @@ import { db } from "@/src/lib/firebase";
 import { Post, Comment, UserProfile } from "@/src/types";
 import { useAuth } from "@/src/context/AuthContext";
 import VideoPlayer from "./VideoPlayer";
+import SharePostSheet from "./SharePostSheet";
+import ConfirmDialog from "@/src/components/ConfirmDialog";
+import { deleteOwnPost } from "@/src/lib/deletePost";
 import { trackPostView, cancelPostViewTracking } from "@/src/lib/postViewTracker";
 import {
   Heart,
@@ -29,6 +32,7 @@ import {
   Share2,
   MoreHorizontal,
   Flag,
+  Trash2,
   Send,
   CornerDownRight,
   X,
@@ -89,6 +93,8 @@ function FeedCard({ post, onReported }: Props) {
   const [likes, setLikes] = useState(post.likesCount);
   const [saves, setSaves] = useState(post.savesCount);
   const [menuOpen, setMenuOpen] = useState(false);
+  const [shareOpen, setShareOpen] = useState(false);
+  const [deleteOpen, setDeleteOpen] = useState(false);
   const [reported, setReported] = useState(false);
 
   // ── Who liked modal ──────────────────────────────────────────────────────
@@ -196,14 +202,9 @@ function FeedCard({ post, onReported }: Props) {
   };
 
   // ── Share ─────────────────────────────────────────────────────────────────
-  const handleShare = async () => {
-    const url = `${window.location.origin}/profile/${post.userId}`;
-    if (navigator.share) {
-      await navigator.share({ title: post.title, url });
-    } else {
-      await navigator.clipboard.writeText(url);
-    }
-    await updateDoc(postRef, { sharesCount: increment(1) });
+  const handleShare = () => {
+    if (!user || !profile) { requireAuth(); return; }
+    setShareOpen(true);
   };
 
   // ── Report ────────────────────────────────────────────────────────────────
@@ -353,6 +354,10 @@ function FeedCard({ post, onReported }: Props) {
               </button>
               {menuOpen && (
                 <div className="absolute right-0 top-full z-10 mt-1 w-40 overflow-hidden rounded-xl border border-slate-100 bg-white shadow-lg">
+                  {isOwn ? <button
+                    onClick={() => { setMenuOpen(false); setDeleteOpen(true); }}
+                    className="flex w-full items-center gap-2 px-4 py-3 text-sm text-red-500 transition hover:bg-red-50"
+                  ><Trash2 className="h-4 w-4" />Delete post</button> : (
                   <button
                     onClick={handleReport}
                     disabled={reported}
@@ -361,6 +366,7 @@ function FeedCard({ post, onReported }: Props) {
                     <Flag className="h-4 w-4" />
                     {reported ? "Reported" : "Report post"}
                   </button>
+                  )}
                 </div>
               )}
             </div>
@@ -441,6 +447,7 @@ function FeedCard({ post, onReported }: Props) {
           </button>
 
           <button
+            aria-label="Share post to messages"
             onClick={handleShare}
             className="ml-auto flex items-center gap-1.5 rounded-full px-3 py-1.5 text-sm font-medium text-slate-500 transition hover:bg-slate-50"
           >
@@ -600,6 +607,15 @@ function FeedCard({ post, onReported }: Props) {
           </div>
         )}
       </article>
+
+      {shareOpen && user && profile && <SharePostSheet key={user.uid} post={post} onClose={() => setShareOpen(false)} />}
+      {deleteOpen && isOwn && <ConfirmDialog
+        title="Delete post?"
+        description="This will permanently remove your post from the feed and your profile."
+        confirmLabel="Delete post"
+        onClose={() => setDeleteOpen(false)}
+        onConfirm={async () => { await deleteOwnPost(post.id); onReported(post.id); }}
+      />}
 
       {/* ── Who liked modal ── */}
       {likersOpen && (

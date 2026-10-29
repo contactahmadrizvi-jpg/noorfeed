@@ -4,7 +4,7 @@ import { useState, useEffect, useCallback } from "react";
 import {
   doc,
   getDoc,
-  writeBatch,
+  runTransaction,
   increment,
   collection,
   query,
@@ -46,6 +46,7 @@ export function useFollow(targetUid: string) {
   const { user, profile, followingCache, updateFollowingCache } = useAuth();
   const [isFollowing, setIsFollowing] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
 
   useEffect(() => {
     setIsFollowing(followingCache.has(targetUid));
@@ -54,17 +55,16 @@ export function useFollow(targetUid: string) {
   // Verify once from Firestore on mount in case cache hasn't hydrated
   useEffect(() => {
     if (!user || !targetUid) return;
-    getDoc(doc(db, "follows", `${user.uid}_${targetUid}`)).then((snap) => {
-      if (snap.exists()) {
-        setIsFollowing(true);
-        updateFollowingCache(targetUid, true);
-      }
-    });
+    return onSnapshot(doc(db, "follows", `${user.uid}_${targetUid}`), (snap) => {
+      setIsFollowing(snap.exists());
+      updateFollowingCache(targetUid, snap.exists());
+    }, () => setError("Could not load follow status. Please try again."));
   }, [user, targetUid, updateFollowingCache]);
 
   const toggle = useCallback(async () => {
     if (!user || !profile || busy || user.uid === targetUid) return;
     setBusy(true);
+    setError("");
 
     const followDocId = `${user.uid}_${targetUid}`;
     const followRef  = doc(db, "follows", followDocId);
@@ -72,28 +72,22 @@ export function useFollow(targetUid: string) {
     const themRef    = doc(db, "users", targetUid);
 
     try {
-      const currentSnap = await getDoc(followRef);
-      const alreadyFollowing = currentSnap.exists();
-      const batch = writeBatch(db);
-
-      if (alreadyFollowing) {
-        batch.delete(followRef);
-        batch.update(meRef,   { followingCount: increment(-1) });
-        batch.update(themRef, { followersCount: increment(-1) });
-        await batch.commit();
-        setIsFollowing(false);
-        updateFollowingCache(targetUid, false);
-      } else {
-        batch.set(followRef, {
+      const nowFollowing = await runTransaction(db, async (transaction) => {
+        const currentSnap = await transaction.get(followRef);
+        const next = !currentSnap.exists();
+        if (next) transaction.set(followRef, {
           followerId:  user.uid,
           followingId: targetUid,
           timestamp:   serverTimestamp(),
         });
-        batch.update(meRef,   { followingCount: increment(1) });
-        batch.update(themRef, { followersCount: increment(1) });
-        await batch.commit();
-        setIsFollowing(true);
-        updateFollowingCache(targetUid, true);
+        else transaction.delete(followRef);
+        transaction.update(meRef, { followingCount: increment(next ? 1 : -1) });
+        transaction.update(themRef, { followersCount: increment(next ? 1 : -1) });
+        return next;
+      });
+      setIsFollowing(nowFollowing);
+      updateFollowingCache(targetUid, nowFollowing);
+      if (nowFollowing) {
 
         // ── Send follow notification ──
         sendNotification({
@@ -106,12 +100,13 @@ export function useFollow(targetUid: string) {
       }
     } catch (e) {
       console.error("follow toggle error", e);
+      setError("Could not update follow status. Please try again.");
     } finally {
       setBusy(false);
     }
   }, [user, profile, targetUid, busy, updateFollowingCache]);
 
-  return { isFollowing, busy, toggle };
+  return { isFollowing, busy, toggle, error };
 }
 
 // ---------------------------------------------------------------------------

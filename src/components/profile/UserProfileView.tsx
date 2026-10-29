@@ -240,6 +240,7 @@ export default function UserProfileView({ uid }: Props) {
                 </button>
               </div>
 
+              {isOwn && <button onClick={() => router.push("/settings/profile")} className="rounded-full border border-slate-200 bg-white px-5 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50">Edit profile</button>}
               {!isOwn && currentUser && (
                 <div className="flex gap-2">
                   <FollowButton targetUid={uid} />

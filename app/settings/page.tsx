@@ -13,7 +13,7 @@ export default function SettingsPage() {
   return <div className="mx-auto max-w-xl px-4 pb-24 pt-5">
     <div className="mb-6 flex items-center gap-3"><Link href="/" aria-label="Back to home" className="rounded-full p-2 text-slate-500 hover:bg-slate-50"><ArrowLeft className="h-5 w-5" /></Link><h1 className="text-xl font-bold">Settings</h1></div>
     {loading ? <p role="status" className="text-sm text-slate-500">Loading settings…</p> : !user ? <div className="rounded-2xl border border-slate-100 p-6 text-center"><p className="text-slate-600">Sign in to manage your story settings.</p><button onClick={requireAuth} className="mt-4 rounded-full bg-emerald-500 px-5 py-2 text-sm font-semibold text-white">Sign in</button></div>
-      : <StorySettings key={user.uid} uid={user.uid} onSaved={refreshProfile} />}
+      : <><Link href="/settings/profile" className="mb-5 flex items-center justify-between rounded-2xl border border-slate-100 bg-white p-5 text-sm font-semibold shadow-sm hover:bg-slate-50"><span>Edit profile<span className="mt-1 block text-xs font-normal text-slate-500">Photo, name, username, bio and interests</span></span><span aria-hidden="true">→</span></Link><StorySettings key={user.uid} uid={user.uid} onSaved={refreshProfile} /></>}
   </div>;
 }
 

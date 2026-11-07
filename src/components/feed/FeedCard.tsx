@@ -2,6 +2,7 @@
 
 import { useState, useRef, useCallback, useEffect, memo } from "react";
 import { useRouter } from "next/navigation";
+import { sendAlgoliaEvent } from "@/src/lib/algolia";
 import {
   doc,
   updateDoc,
@@ -186,6 +187,10 @@ function FeedCard({ post, onReported }: Props) {
       likesCount: increment(next ? 1 : -1),
       likedBy: next ? arrayUnion(user.uid) : arrayRemove(user.uid),
     });
+    // Algolia Insights — conversion event on like
+    if (next) {
+      sendAlgoliaEvent("post_liked", "conversion", [post.id], user.uid);
+    }
     recordFeedSignal(user.uid, post, "like", next);
     if (next) {
       sendNotification({
@@ -327,7 +332,11 @@ function FeedCard({ post, onReported }: Props) {
         {/* ── Author header ── */}
         <div className="flex items-center justify-between px-4 py-3">
           <button
-            onClick={() => router.push(`/profile/${post.userId}`)}
+            onClick={() => {
+              // Algolia Insights — click event for Recommend model training
+              if (user) sendAlgoliaEvent("post_clicked", "click", [post.id], user.uid);
+              router.push(`/profile/${post.userId}`);
+            }}
             className="flex items-center gap-3"
           >
             {post.userAvatar ? (
@@ -413,8 +422,8 @@ function FeedCard({ post, onReported }: Props) {
             <img
               src={post.mediaUrl}
               alt={post.title}
-              className="w-full object-cover"
-              style={{ maxHeight: "480px" }}
+              className="h-auto w-full bg-slate-50 object-contain"
+              style={{ maxHeight: "min(640px, 75svh)" }}
               loading="lazy"
               decoding="async"
             />

@@ -11,6 +11,7 @@ interface Props {
 export default function VideoPlayer({ src, poster }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
+  const [aspectRatio, setAspectRatio] = useState(9 / 16);
   const [muted, setMuted] = useState(true);
   const [visible, setVisible] = useState(false);
 
@@ -61,18 +62,22 @@ export default function VideoPlayer({ src, poster }: Props) {
     <div
       ref={containerRef}
       className="relative w-full overflow-hidden bg-black"
-      style={{ aspectRatio: "9/16", maxHeight: "520px" }}
+      style={{ aspectRatio, maxHeight: "min(520px, 70svh)" }}
     >
       {visible ? (
         <video
           ref={videoRef}
           src={src}
           poster={poster}
-          muted
+          muted={muted}
+          onLoadedMetadata={(event) => {
+            const video = event.currentTarget;
+            if (video.videoWidth && video.videoHeight) setAspectRatio(video.videoWidth / video.videoHeight);
+          }}
           loop
           playsInline
           preload="none" // don't prefetch — we control loading via the observer
-          className="h-full w-full object-cover"
+          className="absolute inset-0 h-full w-full object-contain"
         />
       ) : (
         /* Placeholder keeps the correct aspect-ratio height while offscreen */

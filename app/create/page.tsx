@@ -24,7 +24,7 @@ export default function CreatePage() {
       <div>
         <h1 className="text-2xl font-bold text-slate-900">Share with the Ummah</h1>
         <p className="mt-2 text-slate-500">
-          Post a reminder, ayah, hadith, or any Islamic content to inspire others.
+          Share a reminder, ayah, hadith, or tech content to inspire and inform others.
         </p>
       </div>
       <button

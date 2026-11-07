@@ -1,8 +1,8 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Search, LogOut, Bell, Settings } from "lucide-react";
+import { Search, X, LogOut, Bell, Settings } from "lucide-react";
 import { useAuth } from "@/src/context/AuthContext";
 import AuthModal from "@/src/components/auth/AuthModal";
 import ConfirmDialog from "@/src/components/ConfirmDialog";
@@ -25,16 +25,23 @@ export default function TopHeader() {
   const [authOpen, setAuthOpen] = useState(false);
   const [logoutOpen, setLogoutOpen] = useState(false);
   const [authView, setAuthView] = useState<"login" | "signup">("login");
+  const [searchOpen, setSearchOpen] = useState(false);
+  const searchInputRef = useRef<HTMLInputElement>(null);
+  const searchRequest = useRef(0);
+  const [searchError, setSearchError] = useState("");
+  useEffect(() => { if (searchOpen) searchInputRef.current?.focus(); }, [searchOpen]);
   const [searchVal, setSearchVal] = useState("");
   const [results, setResults] = useState<UserProfile[]>([]);
   const [searching, setSearching] = useState(false);
 
   const handleSearch = async (val: string) => {
+    const request = ++searchRequest.current;
     setSearchVal(val);
-    if (val.trim().length < 2) { setResults([]); return; }
+    setSearchError("");
+    if (val.replace(/^@/, "").trim().length < 2) { setResults([]); setSearching(false); return; }
     setSearching(true);
     try {
-      const clean = val.replace(/^@/, "").toLowerCase();
+      const clean = val.trim().replace(/^@/, "").toLowerCase();
       const q = query(
         collection(db, "users"),
         where("username", ">=", clean),
@@ -42,11 +49,14 @@ export default function TopHeader() {
         limit(6)
       );
       const snap = await getDocs(q);
+      if (request !== searchRequest.current) return;
       setResults(
         snap.docs.map((d) => ({ uid: d.id, ...(d.data() as Omit<UserProfile, "uid">) }))
       );
+    } catch {
+      if (request === searchRequest.current) { setResults([]); setSearchError("Search unavailable. Please try again."); }
     } finally {
-      setSearching(false);
+      if (request === searchRequest.current) setSearching(false);
     }
   };
 
@@ -63,24 +73,34 @@ export default function TopHeader() {
         </button>
 
         {/* Search */}
-        <div className="relative mx-4 hidden max-w-xs flex-1 md:block">
-          <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+        <div id="header-search" className={`${searchOpen ? "absolute inset-x-0 top-14 block border-b border-slate-100 bg-white p-3 shadow-sm" : "hidden"} md:relative md:inset-auto md:mx-4 md:block md:max-w-xs md:flex-1 md:border-0 md:bg-transparent md:p-0 md:shadow-none`}>
+          <Search className="pointer-events-none absolute left-6 top-1/2 md:left-3 h-4 w-4 -translate-y-1/2 text-slate-400" />
           <input
-            type="text"
+            ref={searchInputRef}
+            type="search"
+            aria-label="Search users by username"
+            onKeyDown={(event) => { if (event.key === "Escape") setSearchOpen(false); }}
             value={searchVal}
             onChange={(e) => handleSearch(e.target.value)}
             placeholder="Search @username…"
             className="w-full rounded-full border border-slate-200 bg-slate-50 py-2 pl-9 pr-4 text-sm text-slate-900 outline-none transition focus:border-emerald-400 focus:bg-white focus:ring-2 focus:ring-emerald-400/20"
           />
-          {results.length > 0 && (
+          {(searching || searchError || (searchVal.replace(/^@/, "").trim().length >= 2 && results.length === 0)) && (
+            <div role="status" className="absolute inset-x-3 top-full rounded-xl border border-slate-100 bg-white p-3 text-sm text-slate-500 shadow-lg md:inset-x-0">
+              {searching ? "Searching…" : searchError || "No users found."}
+            </div>
+          )}
+          {!searching && results.length > 0 && (
             <div className="absolute left-0 top-full mt-2 w-full overflow-hidden rounded-xl border border-slate-100 bg-white shadow-lg z-50">
               {results.map((u) => (
                 <button
                   key={u.uid}
                   onClick={() => {
                     router.push(`/profile/${u.uid}`);
+                    ++searchRequest.current;
                     setResults([]);
                     setSearchVal("");
+                    setSearchOpen(false);
                   }}
                   className="flex w-full items-center gap-3 px-4 py-3 text-left transition hover:bg-slate-50"
                 >
@@ -103,7 +123,10 @@ export default function TopHeader() {
         </div>
 
         {/* Right side */}
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-1 md:gap-2">
+          <button type="button" aria-label={searchOpen ? "Close search" : "Search"} aria-expanded={searchOpen} aria-controls="header-search" onClick={() => setSearchOpen((open) => !open)} className="rounded-full p-2 text-slate-500 hover:bg-slate-100 md:hidden">
+            {searchOpen ? <X className="h-5 w-5" /> : <Search className="h-5 w-5" />}
+          </button>
           {user && profile ? (
             <>
               {/* Notification bell with badge */}
@@ -144,7 +167,7 @@ export default function TopHeader() {
               <button
                 onClick={() => setLogoutOpen(true)}
                 aria-label="Sign out"
-                className="rounded-full p-2 text-slate-500 transition hover:bg-slate-100 hover:text-slate-700"
+                className="hidden rounded-full p-2 text-slate-500 transition hover:bg-slate-100 hover:text-slate-700 md:block"
               >
                 <LogOut className="h-4 w-4" />
               </button>

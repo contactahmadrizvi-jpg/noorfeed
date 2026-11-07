@@ -8,7 +8,8 @@ export type IslamicCategory =
   | "Seerah"
   | "Fiqh"
   | "Short Reminders"
-  | "Scholar Lectures";
+  | "Scholar Lectures"
+  | "Tech";
 
 export const ISLAMIC_CATEGORIES: IslamicCategory[] = [
   "Quran",
@@ -18,6 +19,7 @@ export const ISLAMIC_CATEGORIES: IslamicCategory[] = [
   "Fiqh",
   "Short Reminders",
   "Scholar Lectures",
+  "Tech",
 ];
 
 export type StoryAudience = "public" | "followers";

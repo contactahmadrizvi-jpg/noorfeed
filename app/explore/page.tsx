@@ -15,6 +15,7 @@ import FeedCard from "@/src/components/feed/FeedCard";
 import { Loader2 } from "lucide-react";
 
 const CATEGORY_ICONS: Record<IslamicCategory, string> = {
+  Tech: "💻",
   Quran: "📖",
   Hadith: "📜",
   "Daily Duas": "🤲",
@@ -80,7 +81,7 @@ export default function ExplorePage() {
           <span className="text-5xl">🌙</span>
           <p className="font-semibold text-slate-700">Select a category to explore</p>
           <p className="text-sm text-slate-400">
-            Browse Quran, Hadith, Duas, and more.
+            Browse Quran, Hadith, Duas, Tech, and more.
           </p>
         </div>
       )}

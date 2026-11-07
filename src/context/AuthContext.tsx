@@ -28,6 +28,8 @@ import {
 } from "firebase/firestore";
 import { auth, db } from "@/src/lib/firebase";
 import { UserProfile } from "@/src/types";
+import { identifyUser, resetPostHog } from "@/src/lib/posthog";
+import { initAlgoliaInsights } from "@/src/lib/algolia";
 
 const googleProvider = new GoogleAuthProvider();
 googleProvider.setCustomParameters({ prompt: "select_account" });
@@ -35,12 +37,6 @@ googleProvider.setCustomParameters({ prompt: "select_account" });
 interface AuthContextValue {
   user: User | null;
   profile: UserProfile | null;
-  /**
-   * true ONLY for the brief moment Firebase is resolving the persisted
-   * auth token on first load (~100-200 ms). Once resolved, this flips to
-   * false immediately — profile/following load in the background without
-   * blocking the UI.
-   */
   loading: boolean;
   needsOnboarding: boolean;
   followingCache: Set<string>;
@@ -56,120 +52,124 @@ interface AuthContextValue {
 
 const AuthContext = createContext<AuthContextValue | null>(null);
 
+// ── Mint a server-side session cookie via our API route ───────────────────────
+async function mintSessionCookie(user: User): Promise<void> {
+  try {
+    const idToken = await user.getIdToken();
+    await fetch("/api/auth/login", {
+      method:  "POST",
+      headers: { "Content-Type": "application/json" },
+      body:    JSON.stringify({ idToken }),
+    });
+  } catch {
+    // Non-critical — client-side Firebase auth still works
+  }
+}
+
 export function AuthProvider({ children }: { children: ReactNode }) {
-  const [user, setUser]                   = useState<User | null>(null);
-  const [profile, setProfile]             = useState<UserProfile | null>(null);
-  const [loading, setLoading]             = useState(true);
+  const [user, setUser]                       = useState<User | null>(null);
+  const [profile, setProfile]                 = useState<UserProfile | null>(null);
+  const [loading, setLoading]                 = useState(true);
   const [needsOnboarding, setNeedsOnboarding] = useState(false);
   const [followingCache, setFollowingCache]   = useState<Set<string>>(new Set());
   const [authPromptOpen, setAuthPromptOpen]   = useState(false);
 
-  // ── Profile fetch (non-blocking) ────────────────────────────────────────
+  // ── Non-blocking profile fetch ────────────────────────────────────────────
   const fetchProfile = useCallback(async (uid: string) => {
     try {
       const snap = await getDoc(doc(db, "users", uid));
       if (snap.exists()) {
-        setProfile({ uid: snap.id, ...(snap.data() as Omit<UserProfile, "uid">) });
+        const p = { uid: snap.id, ...(snap.data() as Omit<UserProfile, "uid">) };
+        setProfile(p);
         setNeedsOnboarding(false);
+        // Identify in PostHog and Algolia Insights for analytics attribution
+        identifyUser(uid, { username: p.username, displayName: p.displayName });
+        initAlgoliaInsights(uid);
       } else {
         setProfile(null);
         setNeedsOnboarding(true);
       }
-    } catch {
-      // Network error — don't crash, leave profile null
-    }
+    } catch { /* network error — leave profile null */ }
   }, []);
 
-  // ── Following cache (non-blocking) ──────────────────────────────────────
+  // ── Non-blocking following cache ──────────────────────────────────────────
   const loadFollowingCache = useCallback(async (uid: string) => {
     try {
       const q = query(collection(db, "follows"), where("followerId", "==", uid));
       const snap = await getDocs(q);
-      setFollowingCache(
-        new Set(snap.docs.map((d) => d.data().followingId as string))
-      );
-    } catch {
-      // Silently fail — cache stays empty
-    }
+      setFollowingCache(new Set(snap.docs.map((d) => d.data().followingId as string)));
+    } catch { /* fail silently */ }
   }, []);
 
   const refreshProfile = useCallback(async () => {
     if (user) await fetchProfile(user.uid);
   }, [user, fetchProfile]);
 
-  const updateFollowingCache = useCallback(
-    (targetUid: string, following: boolean) => {
-      setFollowingCache((prev) => {
-        const next = new Set(prev);
-        following ? next.add(targetUid) : next.delete(targetUid);
-        return next;
-      });
-    },
-    []
-  );
+  const updateFollowingCache = useCallback((targetUid: string, following: boolean) => {
+    setFollowingCache((prev) => {
+      const next = new Set(prev);
+      following ? next.add(targetUid) : next.delete(targetUid);
+      return next;
+    });
+  }, []);
 
   const requireAuth = useCallback(() => {
     if (!user) setAuthPromptOpen(true);
   }, [user]);
 
-  // ── Auth state listener ──────────────────────────────────────────────────
-  // KEY CHANGE: setLoading(false) fires as soon as we know the auth state,
-  // NOT after profile/following have loaded. Profile + cache load in parallel
-  // in the background — the UI renders immediately with whatever it has.
+  // ── Auth listener — unlocks UI immediately, loads data in background ──────
   useEffect(() => {
     const unsub = onAuthStateChanged(auth, (u) => {
       setUser(u);
-
       if (u) {
-        // Fire profile + following loads concurrently, don't await them
         fetchProfile(u.uid);
         loadFollowingCache(u.uid);
+        mintSessionCookie(u); // fire-and-forget — sets __session cookie
       } else {
         setProfile(null);
         setNeedsOnboarding(false);
         setFollowingCache(new Set());
+        resetPostHog();
+        // Clear the server-side session cookie on sign-out
+        fetch("/api/auth/logout", { method: "POST" }).catch(() => {});
       }
-
-      // Auth state is now known — unlock the UI immediately
       setLoading(false);
     });
     return unsub;
   }, [fetchProfile, loadFollowingCache]);
 
-  const login = (email: string, password: string) =>
-    signInWithEmailAndPassword(auth, email, password).then(() => undefined);
+  // ── Auth methods ──────────────────────────────────────────────────────────
+  const login = async (email: string, password: string) => {
+    const cred = await signInWithEmailAndPassword(auth, email, password);
+    await mintSessionCookie(cred.user);
+  };
 
   const signup = async (email: string, password: string): Promise<User> => {
     const cred = await createUserWithEmailAndPassword(auth, email, password);
+    await mintSessionCookie(cred.user);
     return cred.user;
   };
 
   const loginWithGoogle = async (): Promise<{ user: User; isNew: boolean }> => {
     const cred = await signInWithPopup(auth, googleProvider);
+    await mintSessionCookie(cred.user);
     const snap = await getDoc(doc(db, "users", cred.user.uid));
-    const isNew = !snap.exists();
-    return { user: cred.user, isNew };
+    return { user: cred.user, isNew: !snap.exists() };
   };
 
-  const logout = () => signOut(auth);
+  const logout = async () => {
+    await signOut(auth);
+    // Cookie cleared by the onAuthStateChanged handler above
+  };
+
   const resetPassword = (email: string) => sendPasswordResetEmail(auth, email);
 
   return (
     <AuthContext.Provider
       value={{
-        user,
-        profile,
-        loading,
-        needsOnboarding,
-        followingCache,
-        requireAuth,
-        login,
-        loginWithGoogle,
-        signup,
-        logout,
-        resetPassword,
-        refreshProfile,
-        updateFollowingCache,
+        user, profile, loading, needsOnboarding, followingCache,
+        requireAuth, login, loginWithGoogle, signup,
+        logout, resetPassword, refreshProfile, updateFollowingCache,
       }}
     >
       {children}
@@ -182,15 +182,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
 function SignInPrompt({ onClose }: { onClose: () => void }) {
   const [Modal, setModal] = useState<React.ComponentType<{
-    open: boolean;
-    onClose: () => void;
-    defaultView: "login" | "signup";
+    open: boolean; onClose: () => void; defaultView: "login" | "signup";
   }> | null>(null);
 
   useEffect(() => {
-    import("@/src/components/auth/AuthModal").then((m) =>
-      setModal(() => m.default)
-    );
+    import("@/src/components/auth/AuthModal").then((m) => setModal(() => m.default));
   }, []);
 
   if (!Modal) return null;

@@ -2,6 +2,8 @@
 
 import { useState, useRef, useCallback, useEffect, memo } from "react";
 import { useRouter } from "next/navigation";
+import { usePostAnalytics } from "@/src/hooks/usePostAnalytics";
+import { capturePostMetric } from "@/src/lib/postAnalytics";
 import { sendAlgoliaEvent } from "@/src/lib/algolia";
 import {
   doc,
@@ -120,6 +122,7 @@ function FeedCard({ post, onReported }: Props) {
 
   const postRef = doc(db, "posts", post.id);
   const isOwn = user?.uid === post.userId;
+  usePostAnalytics(cardRef, post, user?.uid ?? null);
 
   // ── View tracking — fires once after card is visible for 1.5 s ──────────
   useEffect(() => {

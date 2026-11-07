@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useAuth } from "@/src/context/AuthContext";
-import type { DayStats } from "@/app/api/creator/analytics/route";
+import type { CreatorAnalytics, DayStats, EngagementStats } from "@/src/types/analytics";
 import {
   AreaChart,
   Area,
@@ -18,11 +18,13 @@ import {
   Eye,
   Heart,
   BarChart2,
-  TrendingUp,
+  Clock,
   Loader2,
   AlertCircle,
   Users,
 } from "lucide-react";
+
+const analyticsCache = new Map<string, { data: CreatorAnalytics; savedAt: number }>();
 
 // ── Stat card ─────────────────────────────────────────────────────────────────
 function StatCard({
@@ -54,7 +56,7 @@ function StatCard({
 function DashboardSkeleton() {
   return (
     <div className="animate-pulse space-y-6 px-4 py-6">
-      <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
+      <div className="grid grid-cols-2 gap-4 sm:grid-cols-3">
         {[1, 2, 3, 4].map((i) => (
           <div key={i} className="h-28 rounded-2xl bg-slate-100" />
         ))}
@@ -68,6 +70,7 @@ export default function DashboardPage() {
   const { user, profile, loading: authLoading } = useAuth();
   const router = useRouter();
 
+  const [summary, setSummary] = useState<EngagementStats | null>(null);
   const [data, setData]       = useState<DayStats[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError]     = useState("");
@@ -80,27 +83,37 @@ export default function DashboardPage() {
   // Fetch analytics
   useEffect(() => {
     if (!user) return;
+    const controller = new AbortController();
     const load = async () => {
-      setLoading(true);
+      const cached = analyticsCache.get(user.uid);
+      if (cached) { setData(cached.data.data); setSummary(cached.data.summary); }
+      setLoading(!cached);
       setError("");
+      if (cached && Date.now() - cached.savedAt < 60000) { setLoading(false); return; }
       try {
         const res = await fetch(
           `/api/creator/analytics?creatorId=${encodeURIComponent(user.uid)}`,
-          { credentials: "include" }
+          { credentials: "include", signal: controller.signal }
         );
         if (!res.ok) {
           const j = await res.json() as { error?: string };
           throw new Error(j.error ?? `HTTP ${res.status}`);
         }
-        const json = await res.json() as { data: DayStats[] };
+        const json = await res.json() as CreatorAnalytics;
+        if (controller.signal.aborted) return;
+        if (analyticsCache.size >= 10) analyticsCache.delete(analyticsCache.keys().next().value!);
+        analyticsCache.set(user.uid, { data: json, savedAt: Date.now() });
         setData(json.data ?? []);
+        setSummary(json.summary);
       } catch (err: unknown) {
-        setError(err instanceof Error ? err.message : "Failed to load analytics.");
+        if (!controller.signal.aborted && !cached) setError(err instanceof Error ? err.message : "Failed to load analytics.");
       } finally {
-        setLoading(false);
+        if (!controller.signal.aborted) setLoading(false);
       }
     };
-    load();
+    void load();
+    const refresh = window.setInterval(() => { void load(); }, 60000);
+    return () => { controller.abort(); window.clearInterval(refresh); };
   }, [user]);
 
   if (authLoading || (!user && !authLoading)) {
@@ -112,10 +125,10 @@ export default function DashboardPage() {
   }
 
   // Aggregate totals
-  const totalViews = data.reduce((s, d) => s + d.views, 0);
-  const totalLikes = data.reduce((s, d) => s + d.likes, 0);
-  const peakViews  = data.length > 0 ? Math.max(...data.map((d) => d.views)) : 0;
-  const engagRate  = totalViews > 0 ? ((totalLikes / totalViews) * 100).toFixed(1) : "0";
+  const totalViews = summary?.views ?? 0;
+  const totalLikes = summary?.likes ?? 0;
+  const totalImpressions = summary?.impressions ?? 0;
+  const averageWatch = summary?.avgWatchSeconds ?? 0;
 
   return (
     <div className="mx-auto max-w-4xl px-4 pb-24 pt-6">
@@ -162,26 +175,29 @@ export default function DashboardPage() {
             />
             <StatCard
               icon={Heart}
-              label="Total Likes"
+              label="Net Likes"
               value={totalLikes.toLocaleString()}
-              sub="30-day total"
+              sub="likes minus unlikes in this period"
               color="bg-red-50 text-red-500"
             />
             <StatCard
-              icon={TrendingUp}
-              label="Peak Views"
-              value={peakViews.toLocaleString()}
-              sub="single day high"
+              icon={Eye}
+              label="Impressions"
+              value={totalImpressions.toLocaleString()}
+              sub="50% visible for at least 1 second"
               color="bg-emerald-50 text-emerald-600"
             />
             <StatCard
               icon={Users}
-              label="Engagement"
-              value={`${engagRate}%`}
-              sub="likes / views"
+              label="Unique Viewers"
+              value={(summary?.uniqueViewers ?? 0).toLocaleString()}
+              sub="people with a qualified view"
               color="bg-purple-50 text-purple-600"
             />
+            <StatCard icon={Clock} label="Avg Watch / Viewer" value={`${averageWatch.toFixed(1)}s`} sub="total video watch time / unique video viewers" color="bg-orange-50 text-orange-600" />
+            <StatCard icon={Clock} label="Total Watch Time" value={`${((summary?.watchSeconds ?? 0) / 60).toFixed(1)} min`} sub="visible video playback only" color="bg-indigo-50 text-indigo-600" />
           </div>
+          <p className="text-xs text-slate-500">Signed-in audience only; your own activity is excluded. Counts start when tracking is enabled. Updated about once a minute. Views require 2 seconds of visibility or video playback. Average watch time covers all your videos per viewer over 30 days.</p>
 
           {/* Chart */}
           {data.length === 0 ? (
@@ -245,6 +261,7 @@ export default function DashboardPage() {
                     iconSize={8}
                     wrapperStyle={{ fontSize: "12px", paddingTop: "12px" }}
                   />
+                  <Area type="monotone" dataKey="impressions" name="Impressions" stroke="#8b5cf6" fill="#8b5cf6" fillOpacity={0.05} dot={false} />
                   <Area
                     type="monotone"
                     dataKey="views"
@@ -258,7 +275,7 @@ export default function DashboardPage() {
                   <Area
                     type="monotone"
                     dataKey="likes"
-                    name="Likes"
+                    name="Net Likes"
                     stroke="#10b981"
                     strokeWidth={2}
                     fill="url(#colorLikes)"

@@ -9,6 +9,7 @@
  *
  * Caching: results cached in Upstash Redis for 10 minutes.
  */
+import type { CreatorAnalytics, EngagementStats } from "@/src/types/analytics";
 import { NextRequest, NextResponse } from "next/server";
 import { getAdminAuth } from "@/src/lib/firebaseAdmin";
 import { cachedFetch } from "@/src/lib/redis";
@@ -16,12 +17,6 @@ import { cachedFetch } from "@/src/lib/redis";
 const POSTHOG_API_KEY    = process.env.POSTHOG_PERSONAL_API_KEY ?? "";
 const POSTHOG_PROJECT_ID = process.env.POSTHOG_PROJECT_ID       ?? "";
 const POSTHOG_HOST       = process.env.NEXT_PUBLIC_POSTHOG_HOST ?? "https://app.posthog.com";
-
-export interface DayStats {
-  date:  string; // "YYYY-MM-DD"
-  views: number;
-  likes: number;
-}
 
 export async function GET(req: NextRequest) {
   // ── 1. Verify session ─────────────────────────────────────────────────────
@@ -57,14 +52,14 @@ export async function GET(req: NextRequest) {
   }
 
   // ── 3. Query PostHog with Redis cache ─────────────────────────────────────
-  const cacheKey = `analytics:creator:${creatorId}`;
+  const cacheKey = `analytics:creator:v2:${creatorId}`;
   try {
-    const data = await cachedFetch<DayStats[]>(
+    const data = await cachedFetch<CreatorAnalytics>(
       cacheKey,
       () => queryPostHog(creatorId),
-      600 // 10 min TTL
+      60 // One-minute cache for new engagement data
     );
-    return NextResponse.json({ data });
+    return NextResponse.json(data);
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : "PostHog query failed";
     console.error("[creator/analytics]", message);
@@ -73,56 +68,50 @@ export async function GET(req: NextRequest) {
 }
 
 // ── PostHog HogQL query ───────────────────────────────────────────────────────
-async function queryPostHog(creatorId: string): Promise<DayStats[]> {
-  /**
-   * HogQL query:
-   *  - Filters to 'post_engaged' events for this creator's posts.
-   *  - Splits by event_type = 'view' | 'like'.
-   *  - Groups by day over the last 30 days.
-   *  - Returns columns: [date, views, likes] — one row per day.
-   */
-  const hogql = `
-    SELECT
-      toDate(timestamp)                                                  AS date,
-      countIf(properties.event_type = 'view')                           AS views,
-      countIf(properties.event_type = 'like')                           AS likes
-    FROM events
-    WHERE
-      event = 'post_engaged'
-      AND properties.creator_id = '${creatorId.replace(/'/g, "\\'")}'
-      AND timestamp >= now() - INTERVAL 30 DAY
-    GROUP BY date
-    ORDER BY date ASC
-  `.trim();
+const aggregates = `
+  countIf(properties.event_type = 'view'),
+  countIf(properties.event_type = 'impression'),
+  sumIf(toFloat(properties.like_delta), properties.event_type IN ('like', 'unlike')),
+  uniqExactIf(properties.viewer_id, properties.event_type = 'view'),
+  sumIf(toFloat(properties.watch_seconds), properties.event_type = 'watch_time'),
+  uniqExactIf(properties.viewer_id, properties.event_type = 'watch_time' AND toFloat(properties.watch_seconds) > 0)
+`;
 
-  const url = `${POSTHOG_HOST}/api/projects/${POSTHOG_PROJECT_ID}/query/`;
+function shapeStats(row: unknown[]): EngagementStats {
+  const number = (index: number) => { const value = Number(row[index]); return Number.isFinite(value) ? value : 0; };
+  const watchSeconds = number(4);
+  const watchViewers = number(5);
+  return { views: number(0), impressions: number(1), likes: number(2), uniqueViewers: number(3), watchSeconds, watchViewers, avgWatchSeconds: watchViewers ? watchSeconds / watchViewers : 0 };
+}
 
-  const res = await fetch(url, {
-    method:  "POST",
-    headers: {
-      "Authorization": `Bearer ${POSTHOG_API_KEY}`,
-      "Content-Type":  "application/json",
-    },
-    body: JSON.stringify({
-      query: { kind: "HogQLQuery", query: hogql },
-    }),
-    next: { revalidate: 0 },
-    signal: AbortSignal.timeout(15_000),
-  });
-
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error(`PostHog API ${res.status}: ${text.slice(0, 200)}`);
-  }
-
-  const json = await res.json() as {
-    results: Array<[string, number, number]>;
+async function queryPostHog(creatorId: string): Promise<CreatorAnalytics> {
+  const escaped = creatorId.replace(/\\/g, "\\\\").replace(/'/g, "\\'");
+  const from = `FROM events
+    WHERE event = 'post_engaged' AND properties.schema_version = 2
+      AND properties.creator_id = '${escaped}'
+      AND properties.viewer_id != properties.creator_id
+      AND timestamp >= now() - INTERVAL 30 DAY`;
+  const [daily, total] = await Promise.all([
+    runQuery(`SELECT toDate(timestamp), ${aggregates} ${from} GROUP BY toDate(timestamp) ORDER BY toDate(timestamp) ASC`),
+    runQuery(`SELECT ${aggregates} ${from}`),
+  ]);
+  return {
+    data: daily.map((row) => ({ date: String(row[0]).slice(0, 10), ...shapeStats(row.slice(1)) })),
+    summary: shapeStats(total[0] ?? []),
   };
+}
 
-  // Shape for Recharts: [{ date, views, likes }]
-  return (json.results ?? []).map(([date, views, likes]) => ({
-    date:  date.slice(0, 10), // ensure "YYYY-MM-DD"
-    views: Number(views),
-    likes: Number(likes),
-  }));
+async function runQuery(query: string): Promise<unknown[][]> {
+  // Ingestion hosts and query API hosts differ on PostHog Cloud.
+  const host = POSTHOG_HOST.replace("us.i.posthog.com", "us.posthog.com").replace("eu.i.posthog.com", "eu.posthog.com").replace(/\/$/, "");
+  const res = await fetch(`${host}/api/projects/${POSTHOG_PROJECT_ID}/query/`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${POSTHOG_API_KEY}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ query: { kind: "HogQLQuery", query } }),
+    cache: "no-store",
+    signal: AbortSignal.timeout(15000),
+  });
+  if (!res.ok) throw new Error(`PostHog query failed (HTTP ${res.status}).`);
+  const json = await res.json() as { results?: unknown[][] };
+  return json.results ?? [];
 }

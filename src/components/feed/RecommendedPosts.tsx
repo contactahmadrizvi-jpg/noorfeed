@@ -46,7 +46,6 @@ function FeedSession({ excludePostId }: { excludePostId?: string }) {
   const { user, profile, followingCache } = useAuth();
   const [posts, setPosts]         = useState<Post[]>([]);
   const nextPageRef = useRef(0);
-  const browserFallbackRef = useRef(false);
   const browserFeedRef = useRef<RecommendationFeed | null>(null);
   const inFlightRef = useRef(false);
   const [loading, setLoading]     = useState(true);
@@ -55,6 +54,8 @@ function FeedSession({ excludePostId }: { excludePostId?: string }) {
   const [error, setError]         = useState("");
   const [source, setSource]       = useState<"algolia" | "firestore" | null>(null);
   const sentinelRef = useRef<HTMLDivElement>(null);
+  const feedContext = useRef({ profile, followingCache, uid: user?.uid ?? null });
+  useEffect(() => { feedContext.current = { profile, followingCache, uid: user?.uid ?? null }; }, [profile, followingCache, user?.uid]);
 
   const fetchPage = useCallback(async (pageNum: number, append = false) => {
     if (inFlightRef.current) return;
@@ -64,27 +65,11 @@ function FeedSession({ excludePostId }: { excludePostId?: string }) {
     setError("");
 
     try {
-      let json: { posts: Post[]; source: "algolia" | "firestore"; hasMore?: boolean };
-      if (!browserFallbackRef.current) {
-        const res = await fetch(
-          `/api/feed/personalized?page=${pageNum}`,
-          { credentials: "include" }
-        );
-        const result = await res.json();
-        if (!res.ok) throw new Error(result?.error || "Unable to load the feed. Please try again.");
-        browserFallbackRef.current = result.clientFallback === true;
-        json = result;
-      } else {
-        json = { posts: [], source: "firestore" };
-      }
-      let fallbackHasMore: boolean | undefined;
-      if (browserFallbackRef.current) {
-        if (pageNum === 0) browserFeedRef.current = null;
-        browserFeedRef.current ??= new RecommendationFeed(excludePostId ? [excludePostId] : []);
-        const result = await browserFeedRef.current.next({ profile, following: followingCache, signals: getFeedSignals(user?.uid ?? null) });
-        fallbackHasMore = result.hasMore;
-        json = { posts: result.posts, source: "firestore" };
-      }
+      // Start Firestore immediately rather than waiting for a server fallback deadline.
+      const context = feedContext.current;
+      browserFeedRef.current ??= new RecommendationFeed(excludePostId ? [excludePostId] : []);
+      const result = await browserFeedRef.current.next({ profile: context.profile, following: context.followingCache, signals: getFeedSignals(context.uid) });
+      const json = { posts: result.posts, source: "firestore" as const };
 
       const rawPosts: Post[] = (json.posts ?? []).map((p) =>
         // Algolia returns objectID instead of id — normalise
@@ -92,10 +77,10 @@ function FeedSession({ excludePostId }: { excludePostId?: string }) {
       );
 
       setSource(json.source);
-      setHasMore(fallbackHasMore ?? json.hasMore ?? rawPosts.length === 12);
+      setHasMore(result.hasMore);
 
       nextPageRef.current = pageNum + 1;
-      const scored = sortFeed(rawPosts.filter((post) => post.id !== excludePostId), profile, followingCache);
+      const scored = sortFeed(rawPosts.filter((post) => post.id !== excludePostId), context.profile, context.followingCache);
 
       setPosts((prev) => {
         if (!append) return scored;
@@ -109,7 +94,7 @@ function FeedSession({ excludePostId }: { excludePostId?: string }) {
       setLoading(false);
       setLoadingMore(false);
     }
-  }, [user, profile, followingCache, excludePostId]);
+  }, [excludePostId]);
 
   // Initial load
   useEffect(() => {

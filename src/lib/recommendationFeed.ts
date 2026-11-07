@@ -2,7 +2,7 @@ import { collection, getDocs, limit, orderBy, query, startAfter, where, QueryCon
 import { db } from "@/src/lib/firebase";
 import { Post, UserProfile } from "@/src/types";
 import { FeedSignals } from "./feedLearning";
-import { isPreferred, preferredCategories, selectFeedPage } from "./feedAlgorithm";
+import { preferredCategories, selectFeedPage } from "./feedAlgorithm";
 
 export interface FeedContext { profile: UserProfile | null; following: ReadonlySet<string>; signals?: FeedSignals }
 interface Source { constraints: QueryConstraint[]; cursor: QueryDocumentSnapshot<DocumentData> | null; done: boolean; size: number }
@@ -36,9 +36,8 @@ export class RecommendationFeed {
     try {
       this.configure(context);
       const pool = [...this.candidates.values()];
-      const preferred = pool.filter((post) => isPreferred(post, context.profile, context.following, context.signals)).length;
       let partial = false;
-      if (pool.length < size * 2 || preferred < size * 0.75 || pool.length - preferred < size * 0.25) {
+      if (pool.length < size) {
         const pending = this.activeKeys.filter((key) => !this.sources.get(key)!.done);
         const reads = await Promise.allSettled(pending.map(async (key) => {
           const source = this.sources.get(key)!;

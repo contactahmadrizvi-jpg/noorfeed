@@ -31,6 +31,9 @@ export function getRedis(): Redis {
 
 // ── Cache-aside helpers ───────────────────────────────────────────────────────
 
+const localCache = new Map<string, { value: unknown; expires: number }>();
+const pending = new Map<string, Promise<unknown>>();
+
 const DEFAULT_TTL = 300; // 5 minutes
 
 /**
@@ -42,6 +45,21 @@ export async function cachedFetch<T>(
   fetcher: () => Promise<T>,
   ttlSeconds = DEFAULT_TTL
 ): Promise<T> {
+  const cached = localCache.get(key);
+  if (cached && cached.expires > Date.now()) return cached.value as T;
+  const existing = pending.get(key);
+  if (existing) return existing as Promise<T>;
+  const request = fetchCached(key, fetcher, ttlSeconds).then((value) => {
+    if (pending.get(key) !== request) return value;
+    if (localCache.size >= 100) localCache.delete(localCache.keys().next().value!);
+    localCache.set(key, { value, expires: Date.now() + Math.min(ttlSeconds, 300) * 1000 });
+    return value;
+  }).finally(() => { if (pending.get(key) === request) pending.delete(key); });
+  pending.set(key, request);
+  return request;
+}
+
+async function fetchCached<T>(key: string, fetcher: () => Promise<T>, ttlSeconds: number): Promise<T> {
   let redis: Redis;
   try {
     redis = getRedis();
@@ -70,6 +88,7 @@ export async function cachedFetch<T>(
 
 /** Invalidate one or more cache keys */
 export async function invalidateCache(...keys: string[]): Promise<void> {
+  keys.forEach((key) => { localCache.delete(key); pending.delete(key); });
   try {
     const redis = getRedis();
     await Promise.all(keys.map((k) => redis.del(k)));
